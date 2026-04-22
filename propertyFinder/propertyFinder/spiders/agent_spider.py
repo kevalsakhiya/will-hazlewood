@@ -43,7 +43,7 @@ class AgentSpider(Spider):
         item['listings_total'] = listings_total
 
         is_superagent = jmespath.search('superagent', agent_data)
-        item['is_superagent'] = is_superagent if is_superagent else None
+        item['is_superagent'] = is_superagent if is_superagent is not None else None
         
         agent_id = jmespath.search('id', agent_data)
 
@@ -63,19 +63,19 @@ class AgentSpider(Spider):
         item['closed_transaction_rent'] = int(closed_transaction_rent) if closed_transaction_rent else None
 
         closed_transaction_deal_volume = jmespath.search('claimedTransactionsDealVolume', agent_data)
-        item['closed_transaction_deal_volume'] = int(closed_transaction_deal_volume) if closed_transaction_deal_volume else None
+        item['closed_transaction_deal_volume'] = float(closed_transaction_deal_volume) if closed_transaction_deal_volume else None
 
         closed_transaction_sale_avg_amount = jmespath.search('claimedTransactionsSaleAVGAmount', agent_data)
-        item['closed_transaction_sale_avg_amount'] = int(closed_transaction_sale_avg_amount) if closed_transaction_sale_avg_amount else None
+        item['closed_transaction_sale_avg_amount'] = float(closed_transaction_sale_avg_amount) if closed_transaction_sale_avg_amount else None
 
         closed_transaction_rent_avg_amount = jmespath.search('claimedTransactionsRentAVGAmount', agent_data)
-        item['closed_transaction_rent_avg_amount'] = int(closed_transaction_rent_avg_amount) if closed_transaction_rent_avg_amount else None
+        item['closed_transaction_rent_avg_amount'] = float(closed_transaction_rent_avg_amount) if closed_transaction_rent_avg_amount else None
 
         closed_transaction_rent_total_amount = jmespath.search('claimedTransactionsRentTotalAmount', agent_data)
-        item['closed_transaction_rent_total_amount'] = int(closed_transaction_rent_total_amount) if closed_transaction_rent_total_amount else None
+        item['closed_transaction_rent_total_amount'] = float(closed_transaction_rent_total_amount) if closed_transaction_rent_total_amount else None
 
         closed_transaction_sale_total_amount = jmespath.search('claimedTransactionsSaleTotalAmount', agent_data)
-        item['closed_transaction_sale_total_amount'] = int(closed_transaction_sale_total_amount) if closed_transaction_sale_total_amount else None
+        item['closed_transaction_sale_total_amount'] = float(closed_transaction_sale_total_amount) if closed_transaction_sale_total_amount else None
 
         
 
@@ -85,9 +85,6 @@ class AgentSpider(Spider):
             deal_type = jmespath.search('dealType', transaction)
             deal_date = jmespath.search('date', transaction)
             deal_date = datetime.strptime(deal_date, '%Y-%m-%d') if deal_date else None
-            deal_price = jmespath.search('price', transaction)
-            deal_price = int(deal_price) if deal_price else 0
-
             if "Rent" in deal_type:
                 if deal_date and (most_recent_deal_date_rent is None or deal_date > most_recent_deal_date_rent):
                     most_recent_deal_date_rent = deal_date
@@ -106,46 +103,46 @@ class AgentSpider(Spider):
         average_monthly_deal_volume_rent = total_monthly_deal_volume_rent / len(unique_month_rent) if unique_month_rent else 0
         average_monthly_deal_volume_sale = total_monthly_deal_volume_sale / len(unique_month_sale) if unique_month_sale else 0
 
+        item['closed_deals_total'] = (item.get('closed_transaction_sale') or 0) + (item.get('closed_transaction_rent') or 0) or None
         item['average_monthly_deal_volume_rent'] = average_monthly_deal_volume_rent
         item['average_monthly_deal_volume_sale'] = average_monthly_deal_volume_sale
         item['most_recent_deal_date_rent'] = most_recent_deal_date_rent.strftime('%Y-%m-%d') if most_recent_deal_date_rent else None
         item['most_recent_deal_date_sale'] = most_recent_deal_date_sale.strftime('%Y-%m-%d') if most_recent_deal_date_sale else None
-        
-        agnecy_url = jmespath.search('broker.slug', agent_data)
-        agency_url = response.urljoin(agnecy_url)
+
+        agency_slug = jmespath.search('broker.slug', agent_data)
+        agency_url = response.urljoin(agency_slug) if agency_slug else None
 
         total_page_count = jmespath.search('props.pageProps.property.meta.page_count', next_data)
         total_page_count = int(total_page_count) if total_page_count else 0
 
-        if agency_url:
-            yield Request(agency_url, 
-                        callback=self.parse_agency,
-                        meta={
-                        'total_page_count': total_page_count,
-                        'agent_id':agent_id,
-                        'item':item},
-                        )
-        else:
-            if total_page_count > 1:
-                headers = {
-                'accept': '*/*',
-                'accept-language': 'en-GB,en;q=0.9,en-US;q=0.8,hi;q=0.7,fr;q=0.6,gu;q=0.5',
+        headers = {
+            'accept': '*/*',
+            'accept-language': 'en-GB,en;q=0.9,en-US;q=0.8,hi;q=0.7,fr;q=0.6,gu;q=0.5',
             'locale': 'en',
             'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
-            }
-            
-            if total_page_count>1:
-                url = f"https://www.propertyfinder.ae/api/pwa/property/search?sorting.sort=featured&&filters.furnished=all&pagination.limit=10&pagination.page=1&filters.utilities_price_type=notSelected&filters.price_type=price_type_any&filters.agent_id={agent_id}&locale=en"
-                yield Request(url=url, 
-                            headers=headers, 
-                            callback=self.parse_property,
-                            meta={
+        }
+
+        if agency_url:
+            yield Request(agency_url,
+                        callback=self.parse_agency,
+                        meta={
                             'total_page_count': total_page_count,
-                            'current_page':1,
-                            'item':item,
-                            'agent_id':agent_id,
-                            },
-                            )
+                            'agent_id': agent_id,
+                            'item': item,
+                        })
+        elif total_page_count > 0:
+            url = f"https://www.propertyfinder.ae/api/pwa/property/search?sorting.sort=featured&&filters.furnished=all&pagination.limit=10&pagination.page=1&filters.utilities_price_type=notSelected&filters.price_type=price_type_any&filters.agent_id={agent_id}&locale=en"
+            yield Request(url=url,
+                        headers=headers,
+                        callback=self.parse_property,
+                        meta={
+                            'total_page_count': total_page_count,
+                            'current_page': 1,
+                            'item': item,
+                            'agent_id': agent_id,
+                        })
+        else:
+            yield item
 
     def parse_agency(self, response):
         item = response.meta.get('item')
@@ -162,18 +159,19 @@ class AgentSpider(Spider):
             'locale': 'en',
             'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
             }
-        if total_page_count>current_page:
+        if total_page_count > current_page:
             url = f"https://www.propertyfinder.ae/api/pwa/property/search?sorting.sort=featured&&filters.furnished=all&pagination.limit=10&pagination.page={current_page+1}&filters.utilities_price_type=notSelected&filters.price_type=price_type_any&filters.agent_id={agent_id}&locale=en"
-            yield Request(url=url, 
-                        headers=headers, 
+            yield Request(url=url,
+                        headers=headers,
                         callback=self.parse_property,
                         meta={
-                        'total_page_count': total_page_count,
-                        'current_page':current_page+1,
-                        'item':item,
-                        'agent_id':agent_id,
-                        },
-                        )
+                            'total_page_count': total_page_count,
+                            'current_page': current_page + 1,
+                            'item': item,
+                            'agent_id': agent_id,
+                        })
+        else:
+            yield item
 
         
     def parse_property(self, response):
@@ -193,7 +191,7 @@ class AgentSpider(Spider):
         
         # next_data = response.xpath('.//script[@id="__NEXT_DATA__"]/text()').get()
         next_data = json.loads(response.text)
-        property_list = jmespath.search('listings', next_data)
+        property_list = jmespath.search('listings', next_data) or []
         
         for property in property_list:
             # calculating listings_with_marketing_spend by checking if property is premium or featured or spotlight badge on it.
@@ -220,14 +218,14 @@ class AgentSpider(Spider):
                 property_rent_price = jmespath.search('property.price.value', property)
                 property_rent_price = int(property_rent_price) if property_rent_price else 0
                 total_property_rent_price += property_rent_price
-                total_listing_age_days_rent += days_old
+                total_listing_age_days_rent += days_old or 0
                 most_recent_listing_date_rent = listed_date if listed_date and (most_recent_listing_date_rent is None or listed_date > most_recent_listing_date_rent) else most_recent_listing_date_rent
 
             elif property_type == 'Residential for Sale':
                 property_sale_price = jmespath.search('property.price.value', property)
                 property_sale_price = int(property_sale_price) if property_sale_price else 0
                 total_property_sale_price += property_sale_price
-                total_listing_age_days_sale += days_old
+                total_listing_age_days_sale += days_old or 0
                 most_recent_listing_date_sale = listed_date if listed_date and (most_recent_listing_date_sale is None or listed_date > most_recent_listing_date_sale) else most_recent_listing_date_sale
 
         if total_page_count>current_page:
