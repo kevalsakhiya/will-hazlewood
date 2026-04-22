@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Data files
+*.json
+*.csv
+*.jsonl
+
+# Logs
+*.log
+
+# Scrapy overrides
+.scrapy
+
+# Virtual Environments
+venv/
+.env
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE / OS specific
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# Model/Agent related
+.claude/
+.gemini/

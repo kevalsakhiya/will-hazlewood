@@ -6,13 +6,13 @@ import jmespath
 
 class AgentSpider(Spider):
     name = 'agent_spider'
-    allowed_domains = ['https://www.propertyfinder.ae']
+    # allowed_domains = ['https://www.propertyfinder.ae']
     # start_urls = ['https://www.propertyfinder.ae']
     start_urls = ['https://www.propertyfinder.ae/en/find-agent']
 
     def parse(self, response):
         agent_url_list = response.xpath('.//div[@data-testid="AgentList"]//a/@href').getall()
-        for agent_url in agent_url_list:
+        for agent_url in agent_url_list[:2]:
             yield Request(url=response.urljoin(agent_url), callback=self.parse_agent)
 
     def parse_agent(self, response):
@@ -21,6 +21,8 @@ class AgentSpider(Spider):
         next_data = response.xpath('.//script[@id="__NEXT_DATA__"]/text()').get()
         next_data = json.loads(next_data)
         agent_data = jmespath.search('props.pageProps.agent', next_data)
+
+        item['agent_url'] = response.url
 
         item['scrape_date'] = datetime.now().strftime('%Y-%m-%d')
         item['platform'] = 'propertyfinder'
@@ -32,13 +34,13 @@ class AgentSpider(Spider):
         item['brn'] = brn.strip() if brn else None
         
         listings_for_sale = jmespath.search('propertiesResidentialForSaleCount', agent_data)
-        item['listings_for_sale'] = listings_for_sale.strip() if listings_for_sale else None
+        item['listings_for_sale'] = int(listings_for_sale) if listings_for_sale else None
         
         listings_for_rent = jmespath.search('propertiesResidentialForRentCount', agent_data)
-        item['listings_for_rent'] = listings_for_rent.strip() if listings_for_rent else None
+        item['listings_for_rent'] = int(listings_for_rent) if listings_for_rent else None
         
         listings_total = listings_for_sale + listings_for_rent
-        item['listings_total'] = listings_total if listings_total else None
+        item['listings_total'] = int(listings_total) if listings_total else None
 
         is_superagent = jmespath.search('superagent', agent_data)
         item['is_superagent'] = is_superagent if is_superagent else None
@@ -61,25 +63,25 @@ class AgentSpider(Spider):
 
         
         closed_transaction_sale = jmespath.search('claimedTransactionsSale', agent_data)
-        item['closed_transaction_sale'] = closed_transaction_sale.strip() if closed_transaction_sale else None
+        item['closed_transaction_sale'] = int(closed_transaction_sale) if closed_transaction_sale else None
 
         closed_transaction_rent = jmespath.search('claimedTransactionsRent', agent_data)
-        item['closed_transaction_rent'] = closed_transaction_sale.strip() if closed_transaction_sale else None
+        item['closed_transaction_rent'] = int(closed_transaction_rent) if closed_transaction_rent else None
 
         closed_transaction_deal_volume = jmespath.search('claimedTransactionsDealVolume', agent_data)
-        item['closed_transaction_deal_volume'] = closed_transaction_sale.strip() if closed_transaction_sale else None
+        item['closed_transaction_deal_volume'] = int(closed_transaction_deal_volume) if closed_transaction_deal_volume else None
 
         closed_transaction_sale_avg_amount = jmespath.search('claimedTransactionsSaleAVGAmount', agent_data)
-        item['closed_transaction_sale_avg_amount'] = closed_transaction_sale.strip() if closed_transaction_sale else None
+        item['closed_transaction_sale_avg_amount'] = int(closed_transaction_sale_avg_amount) if closed_transaction_sale_avg_amount else None
 
         closed_transaction_rent_avg_amount = jmespath.search('claimedTransactionsRentAVGAmount', agent_data)
-        item['closed_transaction_rent_avg_amount'] = closed_transaction_sale.strip() if closed_transaction_sale else None
+        item['closed_transaction_rent_avg_amount'] = int(closed_transaction_rent_avg_amount) if closed_transaction_rent_avg_amount else None
 
         closed_transaction_rent_total_amount = jmespath.search('claimedTransactionsRentTotalAmount', agent_data)
-        item['closed_transaction_rent_total_amount'] = closed_transaction_sale.strip() if closed_transaction_sale else None
+        item['closed_transaction_rent_total_amount'] = int(closed_transaction_rent_total_amount) if closed_transaction_rent_total_amount else None
 
         closed_transaction_sale_total_amount = jmespath.search('claimedTransactionsSaleTotalAmount', agent_data)
-        item['closed_transaction_sale_total_amount'] = closed_transaction_sale.strip() if closed_transaction_sale else None
+        item['closed_transaction_sale_total_amount'] = int(closed_transaction_sale_total_amount) if closed_transaction_sale_total_amount else None
 
         
 
@@ -122,6 +124,7 @@ class AgentSpider(Spider):
                         callback=self.parse_agency,
                         meta={
                         'total_page_count': total_page_count,
+                        'agent_id':agent_id,
                         'item':item},
                         )
         else:
@@ -132,15 +135,17 @@ class AgentSpider(Spider):
             'locale': 'en',
             'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
             }
-            for page_num in range(1, total_page_count + 1):
-                url = f"https://www.propertyfinder.ae/api/pwa/property/search?sorting.sort=featured&&filters.furnished=all&pagination.limit=10&pagination.page={page_num}&filters.utilities_price_type=notSelected&filters.price_type=price_type_any&filters.agent_id={agent_id}&locale=en"
+            
+            if total_page_count>1:
+                url = f"https://www.propertyfinder.ae/api/pwa/property/search?sorting.sort=featured&&filters.furnished=all&pagination.limit=10&pagination.page=1&filters.utilities_price_type=notSelected&filters.price_type=price_type_any&filters.agent_id={agent_id}&locale=en"
                 yield Request(url=url, 
                             headers=headers, 
                             callback=self.parse_property,
                             meta={
                             'total_page_count': total_page_count,
-                            'current_page':page_num,
-                            'item':item
+                            'current_page':1,
+                            'item':item,
+                            'agent_id':agent_id,
                             },
                             )
 
@@ -148,6 +153,7 @@ class AgentSpider(Spider):
         item = response.meta.get('item')
         total_page_count = response.meta.get('total_page_count', 0)
         current_page = response.meta.get('current_page', 0)
+        agent_id = response.meta.get('agent_id')
 
         agency_regestration_number = response.xpath('.//div[@data-testid="license-content"]/text()').get()
         agency_regestration_number = agency_regestration_number.strip() if agency_regestration_number else None
@@ -157,17 +163,18 @@ class AgentSpider(Spider):
             'locale': 'en',
             'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
             }
-        for page_num in range(1, total_page_count + 1):
-                url = f"https://www.propertyfinder.ae/api/pwa/property/search?sorting.sort=featured&&filters.furnished=all&pagination.limit=10&pagination.page={page_num}&filters.utilities_price_type=notSelected&filters.price_type=price_type_any&filters.agent_id={agent_id}&locale=en"
-                yield Request(url=url, 
-                            headers=headers, 
-                            callback=self.parse_property,
-                            meta={
-                            'total_page_count': total_page_count,
-                            'current_page':page_num,
-                            'item':item
-                            },
-                            )
+        if total_page_count>current_page:
+            url = f"https://www.propertyfinder.ae/api/pwa/property/search?sorting.sort=featured&&filters.furnished=all&pagination.limit=10&pagination.page={current_page+1}&filters.utilities_price_type=notSelected&filters.price_type=price_type_any&filters.agent_id={agent_id}&locale=en"
+            yield Request(url=url, 
+                        headers=headers, 
+                        callback=self.parse_property,
+                        meta={
+                        'total_page_count': total_page_count,
+                        'current_page':current_page+1,
+                        'item':item,
+                        'agent_id':agent_id,
+                        },
+                        )
 
         
     def parse_property(self, response):
@@ -175,6 +182,7 @@ class AgentSpider(Spider):
         current_page = response.meta.get('current_page')
         total_page_count = response.meta.get('total_page_count')
         property_data = response.meta.get('property_data', {})
+        agent_id = response.meta.get('agent_id')
 
         listings_with_marketing_spend = property_data.get('listings_with_marketing_spend', 0)
         total_property_rent_price = property_data.get('total_property_rent_price', 0)
@@ -184,11 +192,10 @@ class AgentSpider(Spider):
         most_recent_listing_date_rent = property_data.get('most_recent_listing_date_rent', datetime.now())
         most_recent_listing_date_sale = property_data.get('most_recent_listing_date_sale', datetime.now())
         
-        next_data = response.xpath('.//script[@id="__NEXT_DATA__"]/text()').get()
-        next_data = json.loads(next_data)
-        property_data = jmespath.search('props.pageProps.property', next_data)
-        property_list = jmespath.search('listings',property_data)
-
+        # next_data = response.xpath('.//script[@id="__NEXT_DATA__"]/text()').get()
+        next_data = json.loads(response.text)
+        property_list = jmespath.search('listings', next_data)
+        
         for property in property_list:
             # calculating listings_with_marketing_spend by checking if property is premium or featured or spotlight badge on it.
             is_premium = jmespath.search('property.is_premium', property)
@@ -239,6 +246,7 @@ class AgentSpider(Spider):
                         'total_page_count': total_page_count,
                         'current_page':current_page+1,
                         'item':item,
+                        'agent_id':agent_id,
                         'property_data':{
                             'listings_with_marketing_spend': listings_with_marketing_spend,
                             'total_property_rent_price': total_property_rent_price,
@@ -250,4 +258,19 @@ class AgentSpider(Spider):
                         }
                         },
                         )
+            return
+        
         item['listings_with_marketing_spend'] = listings_with_marketing_spend
+        item['total_property_rent_price'] = total_property_rent_price
+        item['total_property_sale_price'] = total_property_sale_price
+        item['total_listing_age_days_rent'] = total_listing_age_days_rent
+        item['total_listing_age_days_sale'] = total_listing_age_days_sale
+        item['most_recent_listing_date_rent'] = most_recent_listing_date_rent
+        item['most_recent_listing_date_sale'] = most_recent_listing_date_sale
+
+        item['average_listing_price_rent'] = total_property_rent_price / item['listings_for_rent']
+        item['average_listing_price_sale'] = total_property_sale_price / item['listings_for_sale']
+        item['average_listing_age_days_rent'] = total_listing_age_days_rent / item['listings_for_rent']
+        item['average_listing_age_days_sale'] = total_listing_age_days_sale / item['listings_for_sale']
+        
+        yield item
