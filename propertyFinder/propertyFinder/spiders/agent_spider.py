@@ -1,8 +1,8 @@
+import json
+from datetime import datetime
+
 import jmespath
 from scrapy import Request, Spider
-from datetime import datetime
-import json
-import jmespath
 
 class AgentSpider(Spider):
     name = 'agent_spider'
@@ -39,23 +39,17 @@ class AgentSpider(Spider):
         listings_for_rent = jmespath.search('propertiesResidentialForRentCount', agent_data)
         item['listings_for_rent'] = int(listings_for_rent) if listings_for_rent else None
         
-        listings_total = listings_for_sale + listings_for_rent
-        item['listings_total'] = int(listings_total) if listings_total else None
+        listings_total = (listings_for_sale or 0) + (listings_for_rent or 0)
+        item['listings_total'] = listings_total
 
         is_superagent = jmespath.search('superagent', agent_data)
         item['is_superagent'] = is_superagent if is_superagent else None
         
         agent_id = jmespath.search('id', agent_data)
 
-        # logic to extract data from properties
-        property_data = jmespath.search('props.pageProps.property', next_data)
-        property_list = jmespath.search('listings',property_data)
-
-        # now save property data in variable to calculate after it after.
-        
-        most_recent_deal_date_rent = datetime.now()
+        most_recent_deal_date_rent = None
         total_monthly_deal_volume_rent = 0
-        most_recent_deal_date_sale = datetime.now()
+        most_recent_deal_date_sale = None
         total_monthly_deal_volume_sale = 0
         unique_month_rent = set()
         unique_month_sale = set()
@@ -95,15 +89,17 @@ class AgentSpider(Spider):
             deal_price = int(deal_price) if deal_price else 0
 
             if "Rent" in deal_type:
-                if deal_date and deal_date > most_recent_deal_date_rent:
+                if deal_date and (most_recent_deal_date_rent is None or deal_date > most_recent_deal_date_rent):
                     most_recent_deal_date_rent = deal_date
-                unique_month_rent.add(deal_date.strftime('%Y-%m'))
+                if deal_date:
+                    unique_month_rent.add(deal_date.strftime('%Y-%m'))
                 total_monthly_deal_volume_rent += 1
 
             elif "Sale" in deal_type:
-                if deal_date and deal_date > most_recent_deal_date_sale:
+                if deal_date and (most_recent_deal_date_sale is None or deal_date > most_recent_deal_date_sale):
                     most_recent_deal_date_sale = deal_date
-                unique_month_sale.add(deal_date.strftime('%Y-%m'))
+                if deal_date:
+                    unique_month_sale.add(deal_date.strftime('%Y-%m'))
                 total_monthly_deal_volume_sale += 1
         
         # calculating average_listing_price_rent and average_listing_price_sale
@@ -112,6 +108,8 @@ class AgentSpider(Spider):
 
         item['average_monthly_deal_volume_rent'] = average_monthly_deal_volume_rent
         item['average_monthly_deal_volume_sale'] = average_monthly_deal_volume_sale
+        item['most_recent_deal_date_rent'] = most_recent_deal_date_rent.strftime('%Y-%m-%d') if most_recent_deal_date_rent else None
+        item['most_recent_deal_date_sale'] = most_recent_deal_date_sale.strftime('%Y-%m-%d') if most_recent_deal_date_sale else None
         
         agnecy_url = jmespath.search('broker.slug', agent_data)
         agency_url = response.urljoin(agnecy_url)
@@ -155,8 +153,9 @@ class AgentSpider(Spider):
         current_page = response.meta.get('current_page', 0)
         agent_id = response.meta.get('agent_id')
 
-        agency_regestration_number = response.xpath('.//div[@data-testid="license-content"]/text()').get()
-        agency_regestration_number = agency_regestration_number.strip() if agency_regestration_number else None
+        agency_registration_number = response.xpath('.//div[@data-testid="license-content"]/text()').get()
+        agency_registration_number = agency_registration_number.strip() if agency_registration_number else None
+        item['agency_registration_number'] = agency_registration_number
         headers = {
                 'accept': '*/*',
                 'accept-language': 'en-GB,en;q=0.9,en-US;q=0.8,hi;q=0.7,fr;q=0.6,gu;q=0.5',
@@ -268,9 +267,9 @@ class AgentSpider(Spider):
         item['most_recent_listing_date_rent'] = most_recent_listing_date_rent
         item['most_recent_listing_date_sale'] = most_recent_listing_date_sale
 
-        item['average_listing_price_rent'] = total_property_rent_price / item['listings_for_rent']
-        item['average_listing_price_sale'] = total_property_sale_price / item['listings_for_sale']
-        item['average_listing_age_days_rent'] = total_listing_age_days_rent / item['listings_for_rent']
-        item['average_listing_age_days_sale'] = total_listing_age_days_sale / item['listings_for_sale']
+        item['average_listing_price_rent'] = total_property_rent_price / item['listings_for_rent'] if item.get('listings_for_rent') else None
+        item['average_listing_price_sale'] = total_property_sale_price / item['listings_for_sale'] if item.get('listings_for_sale') else None
+        item['average_listing_age_days_rent'] = total_listing_age_days_rent / item['listings_for_rent'] if item.get('listings_for_rent') else None
+        item['average_listing_age_days_sale'] = total_listing_age_days_sale / item['listings_for_sale'] if item.get('listings_for_sale') else None
         
         yield item
