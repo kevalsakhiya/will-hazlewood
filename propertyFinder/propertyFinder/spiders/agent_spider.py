@@ -188,8 +188,8 @@ class AgentSpider(Spider):
         total_property_sale_price = property_data.get('total_property_sale_price', 0)
         total_listing_age_days_rent = property_data.get('total_listing_age_days_rent', 0)
         total_listing_age_days_sale = property_data.get('total_listing_age_days_sale', 0)
-        most_recent_listing_date_rent = property_data.get('most_recent_listing_date_rent', datetime.now())
-        most_recent_listing_date_sale = property_data.get('most_recent_listing_date_sale', datetime.now())
+        most_recent_listing_date_rent = property_data.get('most_recent_listing_date_rent', None)
+        most_recent_listing_date_sale = property_data.get('most_recent_listing_date_sale', None)
         
         # next_data = response.xpath('.//script[@id="__NEXT_DATA__"]/text()').get()
         next_data = json.loads(response.text)
@@ -221,14 +221,14 @@ class AgentSpider(Spider):
                 property_rent_price = int(property_rent_price) if property_rent_price else 0
                 total_property_rent_price += property_rent_price
                 total_listing_age_days_rent += days_old
-                most_recent_listing_date_rent = listed_date if listed_date and listed_date > most_recent_listing_date_rent else most_recent_listing_date_rent
+                most_recent_listing_date_rent = listed_date if listed_date and (most_recent_listing_date_rent is None or listed_date > most_recent_listing_date_rent) else most_recent_listing_date_rent
 
             elif property_type == 'Residential for Sale':
                 property_sale_price = jmespath.search('property.price.value', property)
                 property_sale_price = int(property_sale_price) if property_sale_price else 0
                 total_property_sale_price += property_sale_price
                 total_listing_age_days_sale += days_old
-                most_recent_listing_date_sale = listed_date if listed_date and listed_date > most_recent_listing_date_sale else most_recent_listing_date_sale
+                most_recent_listing_date_sale = listed_date if listed_date and (most_recent_listing_date_sale is None or listed_date > most_recent_listing_date_sale) else most_recent_listing_date_sale
 
         if total_page_count>current_page:
             headers = {
@@ -264,8 +264,8 @@ class AgentSpider(Spider):
         item['total_property_sale_price'] = total_property_sale_price
         item['total_listing_age_days_rent'] = total_listing_age_days_rent
         item['total_listing_age_days_sale'] = total_listing_age_days_sale
-        item['most_recent_listing_date_rent'] = most_recent_listing_date_rent
-        item['most_recent_listing_date_sale'] = most_recent_listing_date_sale
+        item['most_recent_listing_date_rent'] = most_recent_listing_date_rent.strftime('%Y-%m-%d') if most_recent_listing_date_rent else None
+        item['most_recent_listing_date_sale'] = most_recent_listing_date_sale.strftime('%Y-%m-%d') if most_recent_listing_date_sale else None
 
         item['average_listing_price_rent'] = total_property_rent_price / item['listings_for_rent'] if item.get('listings_for_rent') else None
         item['average_listing_price_sale'] = total_property_sale_price / item['listings_for_sale'] if item.get('listings_for_sale') else None
