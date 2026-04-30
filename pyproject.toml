@@ -1,0 +1,44 @@
+[tool.poetry]
+name = "broker-scout"
+version = "0.1.0"
+description = "Dubai broker intelligence — DLD × PropertyFinder × Bayut scraping pipeline"
+authors = ["Keval Sakhiya"]
+readme = "README.md"
+packages = [{ include = "broker_scout", from = "broker_scout" }]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+scrapy = "^2.13"
+jmespath = "^1.0"
+httpx = "^0.28"
+tenacity = "^9.0"
+pydantic = "^2.9"
+psycopg = { version = "^3.2", extras = ["binary", "pool"] }
+gspread = "^6.1"
+google-api-python-client = "^2.150"
+google-auth = "^2.36"
+python-json-logger = "^2.0"
+spidermon = "^1.23"
+python-dotenv = "^1.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3"
+pytest-cov = "^6.0"
+ruff = "^0.8"
+mypy = "^1.13"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true

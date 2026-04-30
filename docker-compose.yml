@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: broker_scout_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-broker_scout}
+      POSTGRES_USER: ${POSTGRES_USER:-broker_scout}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - broker_scout_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-broker_scout} -d ${POSTGRES_DB:-broker_scout}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  broker_scout_pgdata:

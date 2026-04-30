@@ -14,6 +14,11 @@ __pycache__/
 # Scrapy overrides
 .scrapy
 
+# Project artifacts
+secrets/
+dld_snapshots/
+out/
+
 # Virtual Environments
 venv/
 .env
