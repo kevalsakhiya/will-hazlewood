@@ -21,6 +21,11 @@ class RunIdExtension:
       * `spider.run_id` — for pipelines that already hold the spider.
       * `crawler.stats.get_value("run_id")` — for monitors and Spidermon.
       * `RunContext` contextvar — for the JSON log formatter.
+
+    Also initializes `spider.bad_items: list[dict]` — the in-memory buffer
+    for validation failures. Each entry is
+    `{"run_id", "platform", "reason", "payload"}`. Phase 3's Postgres
+    pipeline drains this into the `bad_items` table on `close_spider`.
     """
 
     def __init__(self, crawler):
@@ -38,6 +43,7 @@ class RunIdExtension:
         scrape_date = datetime.now(UTC).date().isoformat()
         spider.run_id = run_id
         spider.scrape_date = scrape_date
+        spider.bad_items = []
         self.crawler.stats.set_value("run_id", run_id)
         self.crawler.stats.set_value("scrape_date", scrape_date)
         set_run_context(

@@ -37,26 +37,75 @@ Run weekly via cron: `python -m broker_scout.tools.fetch_dld` (separate from any
 
 Goal: catch bad rows at the boundary, isolate them, keep good rows flowing.
 
-- [ ] `schemas.py` — pydantic model `PropertyFinderBrokerSchema`
-  - [ ] All fields `Optional[...]` by default
-  - [ ] **No BRN regex** (DLD is the source of truth)
-  - [ ] `broker_name` non-empty string ≤ 200 chars
-  - [ ] `agent_url` starts with `https://www.propertyfinder.ae/`
-  - [ ] `experience_since`: 1980 ≤ year ≤ current year
-  - [ ] `whatsapp_response_time`: 0 ≤ x ≤ 86_400, or null
-  - [ ] `listings_for_sale`, `listings_for_rent`: 0 ≤ x ≤ 5000
-  - [ ] `listings_total` equals `(sale or 0) + (rent or 0)`
-  - [ ] `closed_transaction_*` ≥ 0
-  - [ ] `closed_transaction_*_avg_amount`: 0 ≤ x ≤ 10⁹
-  - [ ] All date fields parse as date, not in future, not before 2000
-  - [ ] `is_superagent`: strict `bool` or null
-  - [ ] `scrape_date` equals today (UTC)
-- [ ] `pipelines/validation.py`
-  - [ ] Run `Schema.model_validate(asdict(item))`
-  - [ ] On success: pass normalized dict downstream
-  - [ ] On `ValidationError`: drop, log, increment `validation/failed_total` and `validation/failed_field/{field}`
-  - [ ] Buffer failures in memory; flush to `bad_items` table once Postgres pipeline lands (Phase 3)
+### 2.1 Plumbing prerequisites
+
+- [x] Convert `broker_scout/pipelines.py` (single-file placeholder) into a `pipelines/` package with `__init__.py`. Delete the no-op `PropertyfinderPipeline`.
+- [x] Add `ITEM_PIPELINES = {}` dict to `settings.py` (currently absent) — slots get filled phase by phase.
+- [x] Lock the contract: `ValidationPipeline.process_item` returns a **dict**, not the dataclass. All later pipelines (Phase 3+) consume dicts. Document this in `pipelines/__init__.py`.
+- [x] Define the bad-items buffer shape now so Phase 3 can drain without refactor: `spider.bad_items: list[dict]` where each entry is `{run_id, platform, reason, payload}`. Initialized in `RunIdExtension.spider_opened`.
+- [x] ~~Add `pytest` to dev deps in `pyproject.toml`~~ (already pinned) and create `tests/` dir at repo root.
+
+### 2.2 `schemas.py` — pydantic model `PropertyFinderBrokerSchema`
+
+**Identity / provenance**
+- [ ] All fields `Optional[...]` by default unless noted
+- [ ] `platform`: `Literal["propertyfinder"]`
+- [ ] `scrape_date`: ISO date string, parses as date, within ±1 day of today UTC (avoids midnight-crossing flakes)
+- [ ] `agent_url`: starts with `https://www.propertyfinder.ae/`
+- [ ] `broker_name`: non-empty string ≤ 200 chars
+- [ ] `brn`: non-empty string when present — **no regex** (DLD is source of truth)
+- [ ] `nationality`: string ≤ 100 chars
+- [ ] `agent_specialization`: string ≤ 100 chars
+- [ ] `experience_since`: 1980 ≤ year ≤ `date.today().year` *(computed at validation time, not import)*
+- [ ] `whatsapp_response_time`: 0 ≤ x ≤ 86_400, or null
+- [ ] `is_superagent`: strict `bool` or null
+
+**Agency**
+- [ ] `agency_url`: starts with `https://www.propertyfinder.ae/` when present
+- [ ] `agency_registration_number`: non-empty string ≤ 100 chars when present
+
+**Listing counts**
+- [ ] `listings_for_sale`, `listings_for_rent`: 0 ≤ x ≤ 5000
+- [ ] `listings_total` equals `(sale or 0) + (rent or 0)` — null only if both inputs null
+- [ ] `listings_with_marketing_spend`: 0 ≤ x ≤ `listings_total` (cross-field)
+
+**Listing prices / ages**
+- [ ] `average_listing_price_sale`, `average_listing_price_rent`: 0 ≤ x ≤ 10⁹
+- [ ] `average_listing_age_days_sale`, `average_listing_age_days_rent`: 0 ≤ x ≤ 36_500
+- [ ] `most_recent_listing_date_sale`, `most_recent_listing_date_rent`: parse as date, ≥ 2000-01-01, ≤ today UTC
+
+**Closed transactions / deals**
+- [ ] `closed_transaction_sale`, `closed_transaction_rent`: ≥ 0
+- [ ] `closed_deals_total` equals `(sale or 0) + (rent or 0)` — null only if both inputs null
+- [ ] `closed_transaction_deal_value`: 0 ≤ x ≤ 10⁹
+- [ ] `closed_transaction_sale_total_amount`, `closed_transaction_rent_total_amount`: 0 ≤ x ≤ 10⁹
+- [ ] `closed_transaction_sale_avg_amount`, `closed_transaction_rent_avg_amount`: 0 ≤ x ≤ 10⁹
+- [ ] `most_recent_deal_date_sale`, `most_recent_deal_date_rent`: parse as date, ≥ 2000-01-01, ≤ today UTC
+- [ ] `average_monthly_deal_volume_sale`, `average_monthly_deal_volume_rent`: ≥ 0
+
+### 2.3 `pipelines/validation.py`
+
+- [ ] Run `PropertyFinderBrokerSchema.model_validate(asdict(item))`
+- [ ] On success: pass normalized dict (`model.model_dump(mode="json")`) downstream
+- [ ] On `ValidationError`:
+  - [ ] Drop the item (`raise DropItem`)
+  - [ ] Log structured error with `run_id`, `brn`, `agent_url`, `errors=[{loc, msg, type}, ...]`
+  - [ ] Increment `validation/failed_total`
+  - [ ] Increment `validation/failed_field/{field}` for each failing field
+  - [ ] Append to `spider.bad_items` buffer with `{run_id, platform, reason, payload}` (Phase 3 drains this)
+- [ ] On success: increment `validation/passed_total` (denominator for the Phase 9.1 failure-rate monitor)
 - [ ] Wire `ValidationPipeline` at priority `200` in `ITEM_PIPELINES`
+
+### 2.4 Tests
+
+- [ ] `tests/test_schemas.py` — table-driven tests covering:
+  - [ ] Happy path: a fully-populated valid item passes
+  - [ ] Each field-level rule rejects its bad input and accepts a valid one
+  - [ ] Cross-field rules (`listings_total`, `closed_deals_total`, `listings_with_marketing_spend`) reject mismatches
+  - [ ] All-null item passes (everything is `Optional`)
+- [ ] `tests/test_validation_pipeline.py`
+  - [ ] Valid item → returned as dict, `validation/passed_total` incremented
+  - [ ] Invalid item → `DropItem` raised, `failed_total` + `failed_field/*` incremented, buffer appended
 
 ---
 
