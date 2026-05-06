@@ -8,26 +8,28 @@ Phase numbering is execution order. Each phase has discrete checkpoints — fini
 
 ## Phase 0 — Foundations *(prerequisite for everything)*
 
-- [ ] Repo layout matches `plan.md` §3 (project package: `broker_scout`)
-- [ ] `pyproject.toml` with pinned deps (`scrapy`, `httpx`, `psycopg[binary,pool]`, `pydantic>=2`, `gspread`/`google-api-python-client`, `tenacity`, `python-json-logger`, `spidermon`)
-- [ ] `.env.example` with `RUN_ENV`, `POSTGRES_*`, `GSHEET_PF_ID`, `GSHEET_BAYUT_ID`, `GDRIVE_FOLDER_ID`, `GOOGLE_CHAT_WEBHOOK_URL`, `SERVICE_ACCOUNT_JSON_PATH`, `PROXY_URL`
-- [ ] `docker-compose.yml` with Postgres for local dev
-- [ ] `utils/logging_setup.py` — JSON logs, `run_id` injected
-- [ ] `extensions.py` — generates `run_id = uuid4()` on spider open, sets `crawler.settings["RUN_ID"]`, propagates to logs and items
-- [ ] `common/run_context.py` — single source for `run_id`, `scrape_date` (UTC), `spider_label`
+- [x] Repo layout matches `plan.md` §3 (project package: `broker_scout`)
+- [x] `pyproject.toml` with pinned deps (`scrapy`, `httpx`, `psycopg[binary,pool]`, `pydantic>=2`, `gspread`/`google-api-python-client`, `tenacity`, `python-json-logger`, `spidermon`)
+- [x] `.env.example` with `RUN_ENV`, `POSTGRES_*`, `GSHEET_PF_ID`, `GSHEET_BAYUT_ID`, `GDRIVE_FOLDER_ID`, `GOOGLE_CHAT_WEBHOOK_URL`, `SERVICE_ACCOUNT_JSON_PATH`, `PROXY_URL`
+- [x] `docker-compose.yml` with Postgres for local dev
+- [x] `utils/logging_setup.py` — JSON logs, `run_id` injected
+- [x] `extensions.py` — generates `run_id = uuid4()` on spider open, propagates via `spider.run_id`, `crawler.stats`, and a `RunContext` contextvar (Scrapy settings freeze post-init, so we don't mutate them)
+- [x] `common/run_context.py` — single source for `run_id`, `scrape_date` (UTC), `spider_label`
 
 ---
 
-## Phase 1 — DLD client *(unblocks both spiders)*
+## Phase 1 — DLD client + `dld_brokers` table *(unblocks both spiders)*
 
-- [ ] `common/dld_client.py`
-  - [ ] `fetch_all_brokers(run_id) -> Iterator[DLDBroker]` — single `pageSize=50000` call
-  - [ ] `Accept-Encoding: gzip, br` header
-  - [ ] `tenacity` retry: 3 attempts, exponential backoff, 2-min timeout
-  - [ ] Snapshot to `dld_snapshots/{run_id}.jsonl` immediately after fetch
-  - [ ] `load_snapshot(run_id)` helper for spider re-runs
-- [ ] `common/normalizers.py` — phone E.164, name trim/casefold, BRN as string, AED `Decimal`
-- [ ] Define `DLDBroker` dataclass: `brn`, `broker_name`, `agency_name`, `phone`, `dld_status`, `dld_raw` (full payload preserved)
+- [x] `sql/migrations/001_dld_brokers.sql` — table schema with `brn` PK, parsed DLD fields, `first_seen_at`, `last_seen_at`, `last_seen_run_id`
+- [x] `common/db.py` — `psycopg_pool.ConnectionPool` from env (reused by Phase 3 pipeline)
+- [x] `tools/migrate.py` — minimal forward-only migration runner; tracks applied files in `_migrations`
+- [x] `common/dld_models.py` — `DLDBroker` dataclass + `from_api()` mapping
+- [x] `common/normalizers.py` — phone E.164, date, email, str helpers
+- [x] `common/dld_client.py` — `fetch_all()` with gzip/br + tenacity retry; `write_snapshot()` to `dld_snapshots/{run_id}.jsonl`
+- [x] `common/dld_repo.py` — `upsert_brokers(records, run_id)` with `ON CONFLICT (brn) DO UPDATE`; preserves `first_seen_at`
+- [x] `tools/fetch_dld.py` — CLI: generate `run_id`, set `RunContext`, fetch, write JSONL, upsert to Postgres, log summary
+
+Run weekly via cron: `python -m broker_scout.tools.fetch_dld` (separate from any spider).
 
 ---
 
@@ -74,8 +76,9 @@ Goal: catch bad rows at the boundary, isolate them, keep good rows flowing.
   - [ ] Flush `bad_items` buffer too
   - [ ] `close_spider`: update `scrape_runs` status `ok`/`failed`, write final `items_scraped`, `items_dropped`, full Scrapy stats blob into `stats` JSONB
 - [ ] `pipelines/stats_writer.py` — small extension to copy spider stats into `scrape_runs.stats` for cross-run monitor reads
-- [ ] Migration runner script (`tools/migrate.py`) — apply versioned `.sql` files
 - [ ] Wire `PostgresPipeline` at priority `400`
+
+(`tools/migrate.py` and `common/db.py` already shipped in Phase 1; reuse here.)
 
 ---
 
