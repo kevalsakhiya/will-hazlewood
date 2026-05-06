@@ -98,14 +98,14 @@ Goal: catch bad rows at the boundary, isolate them, keep good rows flowing.
 
 ### 2.4 Tests
 
-- [ ] `tests/test_schemas.py` — table-driven tests covering:
-  - [ ] Happy path: a fully-populated valid item passes
-  - [ ] Each field-level rule rejects its bad input and accepts a valid one
-  - [ ] Cross-field rules (`listings_total`, `closed_deals_total`, `listings_with_marketing_spend`) reject mismatches
-  - [ ] All-null item passes (everything is `Optional`)
-- [ ] `tests/test_validation_pipeline.py`
-  - [ ] Valid item → returned as dict, `validation/passed_total` incremented
-  - [ ] Invalid item → `DropItem` raised, `failed_total` + `failed_field/*` incremented, buffer appended
+- [x] `tests/test_schemas.py` — table-driven tests covering:
+  - [x] Happy path: a fully-populated valid item passes
+  - [x] Each field-level rule rejects its bad input and accepts a valid one
+  - [x] Cross-field rules (`listings_total`, `closed_deals_total`, `listings_with_marketing_spend`) reject mismatches
+  - [x] All-null item passes (everything is `Optional`)
+- [x] `tests/test_validation_pipeline.py`
+  - [x] Valid item → returned as dict, `validation/passed_total` incremented
+  - [x] Invalid item → `DropItem` raised, `failed_total` + `failed_field/*` incremented, buffer appended
 
 ---
 
