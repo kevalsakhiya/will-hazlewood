@@ -48,40 +48,40 @@ Goal: catch bad rows at the boundary, isolate them, keep good rows flowing.
 ### 2.2 `schemas.py` — pydantic model `PropertyFinderBrokerSchema`
 
 **Identity / provenance**
-- [ ] All fields `Optional[...]` by default unless noted
-- [ ] `platform`: `Literal["propertyfinder"]`
-- [ ] `scrape_date`: ISO date string, parses as date, within ±1 day of today UTC (avoids midnight-crossing flakes)
-- [ ] `agent_url`: starts with `https://www.propertyfinder.ae/`
-- [ ] `broker_name`: non-empty string ≤ 200 chars
-- [ ] `brn`: non-empty string when present — **no regex** (DLD is source of truth)
-- [ ] `nationality`: string ≤ 100 chars
-- [ ] `agent_specialization`: string ≤ 100 chars
-- [ ] `experience_since`: 1980 ≤ year ≤ `date.today().year` *(computed at validation time, not import)*
-- [ ] `whatsapp_response_time`: 0 ≤ x ≤ 86_400, or null
-- [ ] `is_superagent`: strict `bool` or null
+- [x] All fields `Optional[...]` by default unless noted
+- [x] `platform`: `Literal["propertyfinder"]`
+- [x] `scrape_date`: ISO date string, parses as date, within ±1 day of today UTC (avoids midnight-crossing flakes)
+- [x] `agent_url`: starts with `https://www.propertyfinder.ae/`
+- [x] `broker_name`: non-empty string ≤ 200 chars
+- [x] `brn`: non-empty string when present — **no regex** (DLD is source of truth)
+- [x] `nationality`: string ≤ 100 chars
+- [x] `agent_specialization`: string ≤ 100 chars
+- [x] `experience_since`: 1980 ≤ year ≤ `date.today().year` *(computed at validation time, not import)*
+- [x] `whatsapp_response_time`: 0 ≤ x ≤ 86_400, or null
+- [x] `is_superagent`: strict `bool` or null
 
 **Agency**
-- [ ] `agency_url`: starts with `https://www.propertyfinder.ae/` when present
-- [ ] `agency_registration_number`: non-empty string ≤ 100 chars when present
+- [x] `agency_url`: starts with `https://www.propertyfinder.ae/` when present
+- [x] `agency_registration_number`: non-empty string ≤ 100 chars when present
 
 **Listing counts**
-- [ ] `listings_for_sale`, `listings_for_rent`: 0 ≤ x ≤ 5000
-- [ ] `listings_total` equals `(sale or 0) + (rent or 0)` — null only if both inputs null
-- [ ] `listings_with_marketing_spend`: 0 ≤ x ≤ `listings_total` (cross-field)
+- [x] `listings_for_sale`, `listings_for_rent`: 0 ≤ x ≤ 5000
+- [x] `listings_total` equals `(sale or 0) + (rent or 0)` — null only if both inputs null
+- [x] `listings_with_marketing_spend`: 0 ≤ x ≤ `listings_total` (cross-field)
 
 **Listing prices / ages**
-- [ ] `average_listing_price_sale`, `average_listing_price_rent`: 0 ≤ x ≤ 10⁹
-- [ ] `average_listing_age_days_sale`, `average_listing_age_days_rent`: 0 ≤ x ≤ 36_500
-- [ ] `most_recent_listing_date_sale`, `most_recent_listing_date_rent`: parse as date, ≥ 2000-01-01, ≤ today UTC
+- [x] `average_listing_price_sale`, `average_listing_price_rent`: 0 ≤ x ≤ 10⁹
+- [x] `average_listing_age_days_sale`, `average_listing_age_days_rent`: 0 ≤ x ≤ 36_500
+- [x] `most_recent_listing_date_sale`, `most_recent_listing_date_rent`: parse as date, ≥ 2000-01-01, ≤ today UTC
 
 **Closed transactions / deals**
-- [ ] `closed_transaction_sale`, `closed_transaction_rent`: ≥ 0
-- [ ] `closed_deals_total` equals `(sale or 0) + (rent or 0)` — null only if both inputs null
-- [ ] `closed_transaction_deal_value`: 0 ≤ x ≤ 10⁹
-- [ ] `closed_transaction_sale_total_amount`, `closed_transaction_rent_total_amount`: 0 ≤ x ≤ 10⁹
-- [ ] `closed_transaction_sale_avg_amount`, `closed_transaction_rent_avg_amount`: 0 ≤ x ≤ 10⁹
-- [ ] `most_recent_deal_date_sale`, `most_recent_deal_date_rent`: parse as date, ≥ 2000-01-01, ≤ today UTC
-- [ ] `average_monthly_deal_volume_sale`, `average_monthly_deal_volume_rent`: ≥ 0
+- [x] `closed_transaction_sale`, `closed_transaction_rent`: ≥ 0
+- [x] `closed_deals_total` equals `(sale or 0) + (rent or 0)` — null only if both inputs null
+- [x] `closed_transaction_deal_value`: 0 ≤ x ≤ 10⁹
+- [x] `closed_transaction_sale_total_amount`, `closed_transaction_rent_total_amount`: 0 ≤ x ≤ 10⁹
+- [x] `closed_transaction_sale_avg_amount`, `closed_transaction_rent_avg_amount`: 0 ≤ x ≤ 10⁹
+- [x] `most_recent_deal_date_sale`, `most_recent_deal_date_rent`: parse as date, ≥ 2000-01-01, ≤ today UTC
+- [x] `average_monthly_deal_volume_sale`, `average_monthly_deal_volume_rent`: ≥ 0
 
 ### 2.3 `pipelines/validation.py`
 
