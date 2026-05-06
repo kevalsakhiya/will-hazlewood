@@ -24,7 +24,9 @@ EXTENSIONS = {
 # Filled phase by phase per roadmap.md priority table:
 #   100 normalization · 200 validation · 300 dedupe ·
 #   400 postgres     · 500 gsheets    · 600 gdrive_csv
-ITEM_PIPELINES: dict[str, int] = {}
+ITEM_PIPELINES: dict[str, int] = {
+    "broker_scout.pipelines.validation.ValidationPipeline": 200,
+}
 
 CONCURRENT_REQUESTS_PER_DOMAIN = 1
 DOWNLOAD_DELAY = 1

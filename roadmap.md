@@ -85,16 +85,16 @@ Goal: catch bad rows at the boundary, isolate them, keep good rows flowing.
 
 ### 2.3 `pipelines/validation.py`
 
-- [ ] Run `PropertyFinderBrokerSchema.model_validate(asdict(item))`
-- [ ] On success: pass normalized dict (`model.model_dump(mode="json")`) downstream
-- [ ] On `ValidationError`:
-  - [ ] Drop the item (`raise DropItem`)
-  - [ ] Log structured error with `run_id`, `brn`, `agent_url`, `errors=[{loc, msg, type}, ...]`
-  - [ ] Increment `validation/failed_total`
-  - [ ] Increment `validation/failed_field/{field}` for each failing field
-  - [ ] Append to `spider.bad_items` buffer with `{run_id, platform, reason, payload}` (Phase 3 drains this)
-- [ ] On success: increment `validation/passed_total` (denominator for the Phase 9.1 failure-rate monitor)
-- [ ] Wire `ValidationPipeline` at priority `200` in `ITEM_PIPELINES`
+- [x] Run `PropertyFinderBrokerSchema.model_validate(asdict(item))`
+- [x] On success: pass normalized dict (`model.model_dump(mode="json")`) downstream
+- [x] On `ValidationError`:
+  - [x] Drop the item (`raise DropItem`)
+  - [x] Log structured error with `run_id`, `brn`, `agent_url`, `errors=[{loc, msg, type}, ...]`
+  - [x] Increment `validation/failed_total`
+  - [x] Increment `validation/failed_field/{field}` for each failing field
+  - [x] Append to `spider.bad_items` buffer with `{run_id, platform, reason, payload}` (Phase 3 drains this)
+- [x] On success: increment `validation/passed_total` (denominator for the Phase 9.1 failure-rate monitor)
+- [x] Wire `ValidationPipeline` at priority `200` in `ITEM_PIPELINES`
 
 ### 2.4 Tests
 
