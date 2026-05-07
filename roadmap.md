@@ -219,11 +219,11 @@ Stats emitted (consumed by Phase 9 `PipelineFailureMonitor`):
 
 ### 4.5 Bootstrap docs
 
-- [ ] README — one-time setup section:
-  - [ ] Create one template spreadsheet per platform with the column headers in row 1 (matching `_SHEET_COLUMNS`).
-  - [ ] Create one Drive folder per platform for rotated spreadsheets.
-  - [ ] Share both the template and the folder with the service account email (`xxx@xxx.iam.gserviceaccount.com`) as Editor.
-  - [ ] Set `.env` vars listed in §4.1.
+- [x] README — one-time setup section:
+  - [x] Create one template spreadsheet per platform with the column headers in row 1 (matching `_SHEET_COLUMNS`).
+  - [x] Create one Drive folder per platform for rotated spreadsheets.
+  - [x] Share both the template and the folder with the service account email (`xxx@xxx.iam.gserviceaccount.com`) as Editor.
+  - [x] Set `.env` vars listed in §4.1.
 
 ### 4.6 Wire pipeline
 
