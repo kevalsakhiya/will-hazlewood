@@ -14,6 +14,7 @@ from broker_scout.common.matching import (
     Candidate,
     MatchResult,
     _normalize_name,
+    find_plausible_candidates,
     match_candidates,
     promote_to_brn_match,
 )
@@ -217,6 +218,53 @@ def test_promote_no_op_when_brn_disagrees():
     base = MatchResult(status="name_unique", confidence=0.95)
     out = promote_to_brn_match(base, profile_brn="99999", dld_brn="81462")
     assert out is base  # unchanged
+
+
+def test_find_plausible_empty_when_no_candidates():
+    assert find_plausible_candidates(_dld(), []) == []
+
+
+def test_find_plausible_above_threshold_only():
+    cands = [
+        Candidate(name="Dharam Vir Juneja", url="https://pf/exact"),
+        Candidate(name="Dharam V Juneja", url="https://pf/close"),
+        Candidate(name="Totally Different", url="https://pf/junk"),
+    ]
+    out = find_plausible_candidates(_dld("DHARAM VIR JUNEJA"), cands)
+    urls = [c.url for c in out]
+    assert "https://pf/exact" in urls
+    assert "https://pf/close" in urls
+    assert "https://pf/junk" not in urls
+
+
+def test_find_plausible_sorted_by_score_desc():
+    """Top candidate (highest fuzzy score) should be first — that's the
+    one the spider tries first when BRN-disambiguating ambiguous matches."""
+    cands = [
+        Candidate(name="Dharam V Juneja", url="https://pf/close"),
+        Candidate(name="Dharam Vir Juneja", url="https://pf/exact"),
+    ]
+    out = find_plausible_candidates(_dld("DHARAM VIR JUNEJA"), cands)
+    assert out[0].url == "https://pf/exact"
+
+
+def test_find_plausible_threshold_configurable():
+    """Lowered threshold widens the plausible set."""
+    cands = [Candidate(name="DV Juneja", url="https://pf/initials")]
+    high = find_plausible_candidates(_dld("DHARAM VIR JUNEJA"), cands, fuzzy_threshold=95)
+    low = find_plausible_candidates(_dld("DHARAM VIR JUNEJA"), cands, fuzzy_threshold=50)
+    assert high == []
+    assert len(low) == 1
+
+
+def test_find_plausible_no_dld_name_returns_all():
+    """No DLD name to filter by → return everyone (the spider walks
+    them all in BRN-disambiguation mode)."""
+    from dataclasses import replace
+    no_name = replace(_dld(), broker_name_en=None, broker_name_ar=None)
+    cands = [Candidate(name="A", url="https://x"), Candidate(name="B", url="https://y")]
+    out = find_plausible_candidates(no_name, cands)
+    assert len(out) == 2
 
 
 def test_promote_idempotent_on_already_exact_brn():

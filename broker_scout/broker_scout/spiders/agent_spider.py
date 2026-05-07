@@ -11,6 +11,7 @@ from broker_scout.common.matching import (
     DEFAULT_FUZZY_THRESHOLD,
     Candidate,
     MatchResult,
+    find_plausible_candidates,
     match_candidates,
     promote_to_brn_match,
 )
@@ -90,22 +91,128 @@ class AgentSpider(BaseBrokerSpider):
 
         self.crawler.stats.inc_value(f"match/{result.status}")
 
+        if result.status == "ambiguous":
+            # Walk the plausibles by BRN before giving up. Each profile
+            # fetch checks if its BRN equals DLD's. First match wins
+            # and falls through to parse_agent; exhausted list emits
+            # the ambiguous stub.
+            plausibles = find_plausible_candidates(
+                dld_broker, candidates, fuzzy_threshold=threshold
+            )
+            if plausibles:
+                yield self._next_disambiguation(dld_broker, plausibles, idx=0)
+                return
+            # Defensive: status was ambiguous but no plausibles found.
+            yield self._make_dld_stub(
+                dld_broker, status="ambiguous", confidence=result.confidence
+            )
+            return
+
         if result.candidate_url is None:
-            # not_found / ambiguous → emit DLD-only stub
+            # not_found → emit DLD-only stub
             yield self._make_dld_stub(
                 dld_broker, status=result.status, confidence=result.confidence
             )
             return
 
         # matched → fetch the candidate's profile page; thread match
-        # context via meta so the existing parse_agent → parse_agency
-        # → parse_property chain can carry it forward without API
-        # changes to those callbacks beyond reading from meta.
+        # context via cb_kwargs so the existing parse_agent → parse_agency
+        # → parse_property chain can carry it forward.
         yield Request(
             url=response.urljoin(result.candidate_url),
             callback=self.parse_agent,
             cb_kwargs={"dld_broker": dld_broker, "match_result": result},
         )
+
+    # ------------------------------------------------------------------ ambiguous BRN walk
+
+    def _next_disambiguation(
+        self,
+        dld_broker: DLDBroker,
+        plausibles: list[Candidate],
+        idx: int,
+    ) -> Request:
+        """Yield a profile fetch for the next plausible candidate so
+        `parse_disambiguating_profile` can compare its BRN to DLD's."""
+        candidate = plausibles[idx]
+        return Request(
+            url=candidate.url,  # already absolute from _extract_candidates
+            callback=self.parse_disambiguating_profile,
+            cb_kwargs={
+                "dld_broker": dld_broker,
+                "plausibles": plausibles,
+                "idx": idx,
+            },
+        )
+
+    def parse_disambiguating_profile(
+        self,
+        response,
+        dld_broker: DLDBroker,
+        plausibles: list[Candidate],
+        idx: int,
+    ):
+        """Compare this candidate's BRN to DLD's. On match, hand the
+        response to `parse_agent` (which will further promote the match
+        to `exact_brn`). On no match, walk to the next plausible. On
+        exhaustion, emit the ambiguous stub."""
+        candidate_brn = self._extract_profile_brn(response)
+
+        if candidate_brn and candidate_brn == dld_broker.brn:
+            self.crawler.stats.inc_value("match/ambiguous_disambiguated")
+            # Hand off to the normal parse_agent flow with a
+            # name_fuzzy intermediate; promote_to_brn_match inside
+            # parse_agent will upgrade to exact_brn.
+            result = MatchResult(
+                status="name_fuzzy",
+                confidence=0.9,
+                candidate_url=plausibles[idx].url,
+                candidate_brn=candidate_brn,
+            )
+            yield from self.parse_agent(
+                response, dld_broker=dld_broker, match_result=result
+            )
+            return
+
+        # No match. Try the next plausible.
+        if idx + 1 < len(plausibles):
+            yield self._next_disambiguation(dld_broker, plausibles, idx + 1)
+            return
+
+        # Exhausted — none of the plausibles confirmed by BRN.
+        self.crawler.stats.inc_value("match/ambiguous_exhausted")
+        yield self._make_dld_stub(
+            dld_broker, status="ambiguous", confidence=0.0
+        )
+
+    def _extract_profile_brn(self, response) -> str | None:
+        """Pull the BRN out of an agent profile page. Tries the
+        `__NEXT_DATA__` JSON first, falls back to the HTML 'Dubai
+        Broker License' table cell.
+
+        Used by both `_extract_basic` (the matched-flow path) and
+        `parse_disambiguating_profile` (the ambiguous walk).
+        """
+        raw = response.xpath('.//script[@id="__NEXT_DATA__"]/text()').get()
+        if raw:
+            try:
+                next_data = json.loads(raw)
+                agent_data = jmespath.search("props.pageProps.agent", next_data) or {}
+                brn = jmespath.search("compliances[-1].value", agent_data)
+                if brn is not None:
+                    s = str(brn).strip()
+                    if s:
+                        return s
+            except (json.JSONDecodeError, TypeError):
+                pass
+        fallback = response.xpath(
+            './/td[contains(text(),"Dubai Broker License")]'
+            "/following-sibling::td/text()"
+        ).get()
+        if fallback and fallback.strip():
+            self.crawler.stats.inc_value("extract/brn/fallback_used")
+            return fallback.strip()
+        return None
 
     @staticmethod
     def _extract_candidates(response) -> list[Candidate]:
@@ -231,21 +338,8 @@ class AgentSpider(BaseBrokerSpider):
         broker_name = jmespath.search("name", agent_data)
         item.broker_name = broker_name.strip() if broker_name else None
 
-        # BRN: keep as string, default None when missing
-        brn = jmespath.search("compliances[-1].value", agent_data)
-        brn = str(brn).strip() if brn is not None else None
-        if not brn:
-            fallback = response.xpath(
-                './/td[contains(text(),"Dubai Broker License")]'
-                "/following-sibling::td/text()"
-            ).get()
-            brn = fallback.strip() if fallback and fallback.strip() else None
-            if brn:
-                self.logger.warning(
-                    "brn missing in __NEXT_DATA__, using HTML fallback for %s",
-                    response.url,
-                )
-        item.brn = brn or None
+        # BRN: shared with parse_disambiguating_profile via the static helper.
+        item.brn = self._extract_profile_brn(response)
 
         is_superagent = jmespath.search("superagent", agent_data)
         item.is_superagent = is_superagent if is_superagent is not None else None

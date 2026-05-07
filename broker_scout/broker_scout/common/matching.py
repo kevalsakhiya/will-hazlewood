@@ -129,6 +129,35 @@ def match_candidates(
     )
 
 
+def find_plausible_candidates(
+    dld_broker: DLDBroker,
+    candidates: list[Candidate],
+    fuzzy_threshold: int = DEFAULT_FUZZY_THRESHOLD,
+) -> list[Candidate]:
+    """Return candidates whose normalized name passes `fuzzy_threshold`,
+    ordered by descending score.
+
+    Used by the spider when `match_candidates` returns `ambiguous`:
+    instead of giving up, the spider walks this list profile-by-profile
+    and compares each candidate's BRN to the DLD BRN.
+
+    A DLD broker with no name (rare) returns the candidate list as-is —
+    we have no name signal to filter by.
+    """
+    if not candidates:
+        return []
+    dld_norm = _normalize_name(dld_broker.broker_name_en or dld_broker.broker_name_ar)
+    if not dld_norm:
+        return list(candidates)
+    scored = [
+        (fuzz.token_set_ratio(dld_norm, _normalize_name(c.name)), c)
+        for c in candidates
+    ]
+    scored = [(s, c) for s, c in scored if s >= fuzzy_threshold]
+    scored.sort(key=lambda x: -x[0])
+    return [c for _, c in scored]
+
+
 def promote_to_brn_match(
     match_result: MatchResult, profile_brn: Optional[str], dld_brn: str
 ) -> MatchResult:
