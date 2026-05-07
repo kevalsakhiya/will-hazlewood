@@ -26,6 +26,7 @@ EXTENSIONS = {
 #   400 postgres     · 500 gsheets    · 600 gdrive_csv
 ITEM_PIPELINES: dict[str, int] = {
     "broker_scout.pipelines.validation.ValidationPipeline": 200,
+    "broker_scout.pipelines.postgres.PostgresPipeline": 400,
 }
 
 CONCURRENT_REQUESTS_PER_DOMAIN = 1

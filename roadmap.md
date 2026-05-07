@@ -111,23 +111,24 @@ Goal: catch bad rows at the boundary, isolate them, keep good rows flowing.
 
 ## Phase 3 — Postgres pipeline *(authoritative store)*
 
-- [ ] `sql/migrations/001_init.sql`
-  - [ ] `scrape_runs` (run_id, spider, started_at, finished_at, status, items_scraped, items_dropped, stats JSONB)
-  - [ ] `brokers` (run_id, scrape_date, platform, brn, match_status, all fields, raw JSONB; UNIQUE on (run_id, platform, brn))
-  - [ ] `bad_items` (run_id, platform, reason, payload JSONB, created_at)
-  - [ ] `alert_log` (run_id, level, title, body, sent_at)
-  - [ ] Indexes on `brokers(brn)`, `brokers(scrape_date)`
-- [ ] `pipelines/postgres.py`
-  - [ ] Connection pool from env
-  - [ ] `open_spider`: insert row in `scrape_runs` with status `running`
-  - [ ] Per-item: buffer in memory
-  - [ ] Every 500 items + on `close_spider`: bulk insert via `psycopg.copy` or `execute_values` with `ON CONFLICT (run_id, platform, brn) DO NOTHING`
-  - [ ] Flush `bad_items` buffer too
-  - [ ] `close_spider`: update `scrape_runs` status `ok`/`failed`, write final `items_scraped`, `items_dropped`, full Scrapy stats blob into `stats` JSONB
-- [ ] `pipelines/stats_writer.py` — small extension to copy spider stats into `scrape_runs.stats` for cross-run monitor reads
-- [ ] Wire `PostgresPipeline` at priority `400`
+- [x] `sql/migrations/002_brokers.sql` *(was `001_init.sql` in this doc; renumbered because Phase 1 already shipped `001_dld_brokers.sql`)*
+  - [x] `scrape_runs` (run_id, spider, started_at, finished_at, status, items_scraped, items_dropped, stats JSONB)
+  - [x] `brokers` (run_id, scrape_date, platform, brn, match_status, match_confidence, all item fields, raw JSONB; UNIQUE on (run_id, platform, brn))
+  - [x] `bad_items` (run_id, platform, reason, payload JSONB, created_at)
+  - [x] `alert_log` (run_id, level, title, body, sent_at)
+  - [x] Indexes on `brokers(brn)`, `brokers(scrape_date)`, `bad_items(run_id)`
+- [x] `common/brokers_repo.py` — `open_run` / `insert_brokers` / `insert_bad_items` / `close_run` (mirrors `dld_repo.py` pattern)
+- [x] `pipelines/postgres.py`
+  - [x] Connection pool from env (via `common/db.py`)
+  - [x] `open_spider`: insert row in `scrape_runs` with status `running`
+  - [x] Per-item: buffer in memory
+  - [x] Every 500 items + on `spider_closed`: bulk insert via `executemany` with `ON CONFLICT (run_id, platform, brn) DO NOTHING`
+  - [x] Flush `bad_items` buffer too
+  - [x] `spider_closed`: update `scrape_runs` status `ok`/`failed`, write final `items_scraped`, `items_dropped`, full Scrapy stats blob (datetime-coerced) into `stats` JSONB
+- [x] ~~`pipelines/stats_writer.py`~~ — folded into `PostgresPipeline.spider_closed`; a separate extension would write the same blob to the same row.
+- [x] Wire `PostgresPipeline` at priority `400`
 
-(`tools/migrate.py` and `common/db.py` already shipped in Phase 1; reuse here.)
+(`tools/migrate.py` and `common/db.py` already shipped in Phase 1; reused here.)
 
 ---
 
