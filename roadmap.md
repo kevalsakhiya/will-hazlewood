@@ -251,17 +251,105 @@ Stats counters emitted (consumed by Phase 9 `PipelineFailureMonitor`):
 
 ## Phase 6 — DLD-seeded spider refactor
 
-- [ ] `spiders/base.py` — `BaseBrokerSpider` with DLD-driven `start_requests`
-- [ ] `common/matching.py`
-  - [ ] BRN-first match (when PF exposes it)
-  - [ ] Fall back to name-unique, then fuzzy (token-set ratio ≥ 90)
-  - [ ] Return `MatchResult(status, confidence, candidate_url)`
-- [ ] Refactor `agent_spider.py`:
-  - [ ] Drive from DLD snapshot, not a hardcoded name
-  - [ ] PF search → match → pick result → existing parse chain
-  - [ ] Always emit one item per DLD broker, including `not_found` stubs
-  - [ ] Carry `dld_record` and `match_status` through `cb_kwargs`
-- [ ] Add `match_status`, `match_confidence`, `dld_brn`, `dld_broker_name`, `agency_name` (from DLD) to item dataclass
+Goal: replace the hardcoded `"DHARAM VIR JUNEJA"` lookup with a run that drives off the full DLD broker list and emits one validated item per DLD broker, classified by match status. After this phase ships, the system scrapes ~30k brokers per weekly run instead of 1.
+
+Existing state (already in place from Phases 1 + 3):
+- `dld_brokers` table is populated by `tools/fetch_dld` (~30k rows).
+- `brokers.match_status` (default `'unknown'`) and `brokers.match_confidence` columns already exist.
+- `brokers_repo._BROKER_COLUMNS` already references those two.
+
+What's missing (to be added in this phase):
+- `dld_brn`, `dld_broker_name`, `agency_name` columns on `brokers`.
+- Same fields on `PropertyFinderBrokerItem`, `PropertyFinderBrokerSchema`, `_BROKER_COLUMNS`, `_SHEET_HEADERS`.
+- `match_status` as a typed `Literal` in the schema (currently free-form `TEXT` in DB).
+- A DLD-snapshot loader for the spider's `start_requests`.
+- The matching logic itself.
+- A `BaseBrokerSpider` extracted out of `agent_spider`.
+
+### 6.1 Schema, items, migration, repo + sheet wiring (additive, no spider change)
+
+- [ ] `sql/migrations/004_match_columns.sql` — add three columns to `brokers`:
+  - `dld_brn TEXT` *(DLD ground truth — useful for forensics: detect when PF's BRN disagrees with DLD)*
+  - `dld_broker_name TEXT` *(DLD ground truth name, before normalization)*
+  - `agency_name TEXT` *(from DLD `OfficeNameEn`; PF's agency is the URL only)*
+- [ ] Add the three fields to [PropertyFinderBrokerItem](broker_scout/broker_scout/items.py) under a new `# --- match / DLD ground truth ---` block alongside `match_status` and `match_confidence` (which need to be added too — they're not on the dataclass yet).
+- [ ] Update [PropertyFinderBrokerSchema](broker_scout/broker_scout/schemas.py):
+  - [ ] `match_status: Optional[Literal["exact_brn", "name_unique", "name_fuzzy", "ambiguous", "not_found", "unknown"]]`.
+  - [ ] `match_confidence: Optional[float]` with `0 ≤ x ≤ 1`.
+  - [ ] `dld_brn: Optional[str]` non-empty when present (no regex).
+  - [ ] `dld_broker_name: Optional[str]` ≤ 200 chars.
+  - [ ] `agency_name: Optional[str]` ≤ 200 chars.
+- [ ] `brokers_repo._ITEM_COLUMNS` += three new fields (so the per-item INSERT pulls them through).
+- [ ] `sheets_repo._SHEET_HEADERS` += three new fields. **Note for operator**: this changes the column count from 37 → 40, which means re-pasting the header line into the existing template + Split-text-to-columns. Document this in README under "After Phase 6 ships".
+- [ ] `tests/test_schemas.py` += rows in the rejection/acceptance tables for the new fields.
+- [ ] Tick off in this section once the schema migration is applied + tests pass.
+
+### 6.2 Matching layer
+
+- [ ] Add `rapidfuzz = "^3.10"` to [pyproject.toml](pyproject.toml). Pure C, fast, well-maintained; standard for fuzzy string matching in Python.
+- [ ] `common/matching.py`:
+  - [ ] `MatchResult` dataclass: `status` (Literal of statuses above), `confidence` (float 0..1), `candidate_url` (str | None), `candidate_brn` (str | None).
+  - [ ] `_normalize_name(s: str) -> str` — lowercase, collapse whitespace, strip punctuation. DLD names are uppercase, PF names are title case; normalize both before comparison.
+  - [ ] `match_candidates(dld_broker: DLDBroker, candidates: list[Candidate]) -> MatchResult`:
+    - [ ] **BRN match** (highest confidence: 1.0): if any candidate exposes a BRN equal to `dld_broker.brn`, pick it. PF rarely exposes BRN in search results — usually a profile-fetch is needed. Pragmatic: skip BRN at the search-result stage; only confirm BRN match after the agent profile has been fetched (post-`parse_agent`). Status promotes from `name_unique`/`name_fuzzy` → `exact_brn` if the parsed BRN matches.
+    - [ ] **Name-unique** (confidence 0.95): exactly one candidate, normalized name equals normalized DLD name.
+    - [ ] **Name-fuzzy** (confidence = ratio/100): exactly one candidate above the configurable `MATCH_FUZZY_THRESHOLD` (default 90); compute via `rapidfuzz.fuzz.token_set_ratio`.
+    - [ ] **Ambiguous**: multiple candidates above the threshold — emit stub, do not pick.
+    - [ ] **Not found**: zero candidates — emit DLD-only stub.
+- [ ] `tests/test_matching.py`:
+  - [ ] BRN tie-break beats name match.
+  - [ ] Name-unique exact match → `confidence=0.95`.
+  - [ ] Token-set ratio works for "Dharam V. Juneja" vs "DHARAM VIR JUNEJA".
+  - [ ] Multiple high-ratio candidates → ambiguous, not picked.
+  - [ ] Empty candidates → not_found.
+  - [ ] Configurable threshold respected (test override).
+
+### 6.3 DLD snapshot loader
+
+- [ ] `common/dld_repo.py` += `iter_active_brokers() -> Iterator[DLDBroker]` reading every row from the `dld_brokers` table. Postgres is the source of truth; the JSONL snapshots are an audit trail / backup, not the spider's input.
+- [ ] Optionally (defer if not needed): load only rows where `last_seen_run_id` is the most-recent run. Default behavior reads all rows — DLD is broker license registry, expired brokers are still meaningful.
+- [ ] `tests/test_dld_repo.py` += a test for `iter_active_brokers` with mocked cursor returning multiple rows.
+
+### 6.4 `BaseBrokerSpider` + `agent_spider` refactor
+
+- [ ] `spiders/base.py` — `BaseBrokerSpider(Spider)`:
+  - [ ] Class-level `platform: str = ""` (subclass overrides; `agent_spider` sets `"propertyfinder"`).
+  - [ ] `start_requests`: iterate `dld_repo.iter_active_brokers()`, call `self.search_for_broker(dld_broker)` per row, yield from each.
+  - [ ] Abstract method `search_for_broker(self, dld_broker: DLDBroker) -> Iterable[Request]` — subclass implements platform-specific search URL.
+  - [ ] Abstract method `parse_search_results(self, response, dld_broker)` — receives `dld_broker` via `cb_kwargs`. Subclass extracts candidate list, calls `matching.match_candidates(dld_broker, candidates)`, emits one of:
+    - matched → request for the candidate's profile, carrying `dld_broker` + `match_result` via `cb_kwargs`.
+    - ambiguous → emit stub item with `match_status="ambiguous"`.
+    - not_found → emit stub item with `match_status="not_found"`.
+- [ ] Refactor [spiders/agent_spider.py](broker_scout/broker_scout/spiders/agent_spider.py):
+  - [ ] Inherit from `BaseBrokerSpider`; remove the hardcoded name + start_urls.
+  - [ ] `search_for_broker(dld_broker)` builds the PF search URL from `dld_broker.broker_name_en` (or `_ar` fallback).
+  - [ ] `parse_search_results(response, dld_broker)` extracts all candidates from the `<div data-testid="AgentList">`, builds a `Candidate(name, url, brn=None)` list, calls `matching.match_candidates(...)`, and either:
+    - yields the match's profile request → `parse_agent`, carrying `(dld_broker, match_result)`.
+    - yields an ambiguous/not_found stub item directly.
+  - [ ] `parse_agent` receives `dld_broker` + `match_result` from `cb_kwargs`. Sets:
+    - `item.match_status = match_result.status` (may be promoted to `exact_brn` here if PF's BRN matches DLD's).
+    - `item.match_confidence = match_result.confidence`.
+    - `item.dld_brn`, `item.dld_broker_name`, `item.agency_name` from `dld_broker`.
+  - [ ] Stub-item helper (`_emit_dld_stub(dld_broker, status)`) for ambiguous + not_found rows so they go through the same validation pipeline.
+- [ ] Existing parse chain (`parse_agency`, `parse_property`, etc.) untouched aside from threading `dld_broker` + `match_result` through cb_kwargs.
+
+### 6.5 Tests + verification
+
+- [ ] `tests/test_base_spider.py`:
+  - [ ] `start_requests` calls `iter_active_brokers` and routes each broker through `search_for_broker`.
+  - [ ] Stub-item helper produces a dict that passes `PropertyFinderBrokerSchema`.
+- [ ] Refactor existing live smoke: replace `CLOSESPIDER_ITEMCOUNT=1` with a small fixed DLD subset (e.g. set `DLD_LIMIT=5` env var, spider tops out start_requests). Validates the matched/ambiguous/not_found distribution lands in Postgres + Sheets + Drive correctly.
+- [ ] Confirm at the DB level: `SELECT match_status, count(*) FROM brokers WHERE run_id=...GROUP BY match_status;` shows the expected mix.
+
+### 6.6 Settings exposed
+
+- [ ] `MATCH_FUZZY_THRESHOLD` in `settings.py` (default 90), surfaced via `crawler.settings.getfloat(...)` in `matching.py`.
+- [ ] `DLD_LIMIT` (optional int) — when set, `BaseBrokerSpider.start_requests` stops after that many DLD brokers. For dev / smoke testing without scraping the full 30k.
+
+### 6.7 Operator notes (after Phase 6 ships)
+
+- [ ] **Re-paste headers** in both Sheet templates: 6.1 added 3 columns, so 37 → 40. Run `poetry run python -c "from broker_scout.common.sheets_repo import template_header_row; print(','.join(template_header_row()))"`, paste into A1, Split-text-to-columns. Existing data rows under the old headers stay aligned (we appended new columns to the right end of `_SHEET_HEADERS`'s "Provenance" group, so old data is still in the right place; new columns will just be empty for past rows).
+- [ ] First post-deploy run must follow a `python -m broker_scout.tools.fetch_dld` so `dld_brokers` has the latest snapshot.
 
 ---
 
