@@ -180,21 +180,21 @@ Constants: `_SHEET_COLUMNS` tuple drives column order. **Excludes** the `raw` JS
 
 Lifecycle mirrors `PostgresPipeline`: signal-based open/close, in-memory buffer, rebind-on-success flush.
 
-- [ ] `from_crawler` — subscribe `spider_opened` + `spider_closed` (not auto-wired methods, same Phase 3 reasoning).
-- [ ] `spider_opened`:
-  - [ ] Read `spider.platform` (defaults to `"propertyfinder"` until Phase 6 sets it on the base spider).
-  - [ ] `self._sheet_id = sheets_repo.get_or_create_active_sheet(platform)` — auto-creates and shares the monthly file if missing.
-  - [ ] Set `crawler.stats["gsheets/sheet_id"]` (Phase 11 alert links use this).
-- [ ] `process_item`:
-  - [ ] Convert dict → flat row via `_to_row(item)` (column order = `_SHEET_COLUMNS`).
-  - [ ] `self._buffer.append(row)`. Flush at `len >= 2000`.
-- [ ] `_flush(spider)`:
-  - [ ] On first call of run: `pre_flight_capacity_check(sheet_id, projected_run_cells)`.
-  - [ ] `rows = self._buffer; sheets_repo.append_rows(sheet_id, rows); self._buffer = []` — rebind only on success so a failed batch is retried with the same data on the next call.
-  - [ ] `crawler.stats.inc_value("gsheets/rows_appended", len(rows))`.
-- [ ] `spider_closed`:
-  - [ ] Final `_flush()` to drain the < 2000 tail.
-  - [ ] On flush failure: log, swallow, set `gsheets/flush_failed = 1`. Do **not** re-raise (Postgres + Drive CSV must finish their close handlers; Phase 12 `tools/replay_run.py` is the recovery path).
+- [x] `from_crawler` — subscribe `spider_opened` + `spider_closed` (not auto-wired methods, same Phase 3 reasoning).
+- [x] `spider_opened`:
+  - [x] Read `spider.platform` (defaults to `"propertyfinder"` until Phase 6 sets it on the base spider).
+  - [x] `self._sheet_id = sheets_repo.get_or_create_active_sheet(platform)` — auto-creates and shares the monthly file if missing.
+  - [x] Set `crawler.stats["gsheets/sheet_id"]` (Phase 11 alert links use this).
+- [x] `process_item`:
+  - [x] Convert dict → flat row via `sheets_repo.to_row(item)` (column order = `_SHEET_COLUMNS`).
+  - [x] `self._buffer.append(row)`. Flush at `len >= 2000`.
+- [x] `_flush(spider)`:
+  - [x] On first call of run: `pre_flight_capacity_check(sheet_id, projected_run_cells)`.
+  - [x] `rows = self._buffer; self._buffer = []; append_rows(...)` — rebind before handoff; on failure restore the buffer so retry covers it.
+  - [x] `crawler.stats.inc_value("gsheets/rows_appended", len(rows))`.
+- [x] `spider_closed`:
+  - [x] Final `_flush()` to drain the < 2000 tail.
+  - [x] On flush failure: log, swallow, set `gsheets/flush_failed = 1`. Do **not** re-raise (Postgres + Drive CSV must finish their close handlers; Phase 12 `tools/replay_run.py` is the recovery path).
 
 Stats emitted (consumed by Phase 9 `PipelineFailureMonitor`):
 - `gsheets/sheet_id` — string, set on first sheet open.
@@ -203,17 +203,19 @@ Stats emitted (consumed by Phase 9 `PipelineFailureMonitor`):
 
 ### 4.4 Tests
 
-- [ ] `tests/test_sheets_repo.py` — registry + creation flows mocked at the Drive/Sheets client level:
-  - [ ] `get_or_create_active_sheet` returns existing row when `(platform, period, is_active=TRUE)` exists.
-  - [ ] When missing: calls `drive.files.copy`, then `drive.permissions.create` per viewer, then registers, then deactivates prior periods.
-  - [ ] `append_rows` retries on transient errors, gives up after 5 attempts.
-  - [ ] `pre_flight_capacity_check` raises when projected usage exceeds 90% of remaining cells.
-- [ ] `tests/test_gsheets_pipeline.py` — lifecycle (`sheets_repo` mocked at the pipeline's import path):
-  - [ ] `spider_opened` resolves and caches `sheet_id`.
-  - [ ] `process_item` buffers below threshold, flushes at threshold.
-  - [ ] On flush success: buffer rebound to empty.
-  - [ ] On flush failure: buffer retained for retry.
-  - [ ] `spider_closed` final flush + final-flush-failure does not re-raise; sets `flush_failed` stat.
+- [x] `tests/test_sheets_repo.py` — registry + creation flows mocked at the Drive/Sheets client level:
+  - [x] `get_or_create_active_sheet` returns existing row when `(platform, period, is_active=TRUE)` exists.
+  - [x] When missing: calls `drive.files.copy`, then `drive.permissions.create` per viewer, then registers, then deactivates prior periods.
+  - [x] Concurrent-creation race: orphans the Drive copy and falls back to the winner's sheet ID.
+  - [x] `append_rows` retries 5xx/429 transient errors, gives up after 5 attempts; does not retry 4xx.
+  - [x] `pre_flight_capacity_check` raises when projected usage exceeds 90% of remaining cells; aggregates across tabs.
+- [x] `tests/test_gsheets_pipeline.py` — lifecycle (`sheets_repo` mocked at the pipeline's import path):
+  - [x] `spider_opened` resolves and caches `sheet_id`; idempotent on repeat call.
+  - [x] `process_item` buffers below threshold, flushes at threshold.
+  - [x] Pre-flight capacity check runs only on first flush; failure propagates loudly.
+  - [x] On flush success: buffer rebound to empty.
+  - [x] On flush failure: buffer retained for retry.
+  - [x] `spider_closed` final flush + final-flush-failure does not re-raise; sets `flush_failed` stat.
 
 ### 4.5 Bootstrap docs
 
@@ -225,7 +227,7 @@ Stats emitted (consumed by Phase 9 `PipelineFailureMonitor`):
 
 ### 4.6 Wire pipeline
 
-- [ ] `ITEM_PIPELINES` adds `"broker_scout.pipelines.gsheets.GSheetsBatchPipeline": 500`.
+- [x] `ITEM_PIPELINES` adds `"broker_scout.pipelines.gsheets.GSheetsBatchPipeline": 500`.
 
 ---
 

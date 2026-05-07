@@ -27,6 +27,7 @@ EXTENSIONS = {
 ITEM_PIPELINES: dict[str, int] = {
     "broker_scout.pipelines.validation.ValidationPipeline": 200,
     "broker_scout.pipelines.postgres.PostgresPipeline": 400,
+    "broker_scout.pipelines.gsheets.GSheetsBatchPipeline": 500,
 }
 
 CONCURRENT_REQUESTS_PER_DOMAIN = 1
