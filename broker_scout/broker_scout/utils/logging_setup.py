@@ -16,6 +16,19 @@ class RunContextJsonFormatter(jsonlogger.JsonFormatter):
         super().add_fields(log_record, record, message_dict)
         log_record["level"] = record.levelname
         log_record["logger"] = record.name
+
+        # Scrapy core passes the spider OBJECT in extras for some log
+        # lines ("Spider opened", "Spider closed", ...). Coerce to the
+        # name so logs stay JSON-friendly. Cheap duck-type check: a
+        # Spider has a `.name` string attribute.
+        spider_val = log_record.get("spider")
+        if (
+            spider_val is not None
+            and not isinstance(spider_val, str)
+            and isinstance(getattr(spider_val, "name", None), str)
+        ):
+            log_record["spider"] = spider_val.name
+
         ctx = get_run_context()
         if ctx is not None:
             log_record.setdefault("run_id", ctx.run_id)
