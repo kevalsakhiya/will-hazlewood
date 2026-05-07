@@ -37,65 +37,79 @@ SHEETS_CELL_LIMIT = 10_000_000
 CAPACITY_SAFETY_MARGIN = 0.9            # raise if incoming > remaining * 0.9
 PERIOD_FORMAT = "%Y-%m"
 
-# Sheet column order = brokers table columns minus the JSONB blob.
-# Single source of truth: changes to brokers_repo._BROKER_COLUMNS
-# automatically flow here.
-_SHEET_COLUMNS: tuple[str, ...] = tuple(
-    c for c in brokers_repo._BROKER_COLUMNS if c != "raw"
-)
-
-# Display labels for the template spreadsheet's row 1. The pipeline
-# never reads these — they're just what the operator types into the
-# template once. Codified here so the canonical labels survive a
-# template re-creation, and so a future SHEET_COLUMNS reorder forces
-# anyone updating the headers to update both in the same commit.
+# Sheet column order is decoupled from `brokers_repo._BROKER_COLUMNS`
+# (the Postgres table order) because the two have different audiences:
+# the DB is queried with explicit SELECTs, the Sheet is browsed by
+# humans. Layout below groups identity → links → listings → deals →
+# provenance, with sale/rent always paired side-by-side.
 #
-# `dict` (insertion-ordered in Py3.7+) instead of a parallel tuple so
-# the column→label mapping is explicit and a missing column fails
-# loudly via the integrity check below.
+# `dict` (insertion-ordered in Py3.7+) so the column→label mapping is
+# explicit and a missing or extra column fails loudly via the
+# integrity check below. The mapping doubles as both the data column
+# order (`_SHEET_COLUMNS`) and the template's row-1 labels.
 _SHEET_HEADERS: dict[str, str] = {
-    "run_id": "Run ID",
-    "scrape_date": "Scrape Date",
-    "platform": "Platform",
-    "brn": "BRN",
-    "match_status": "Match Status",
-    "match_confidence": "Match Confidence",
-    "agent_url": "Agent URL",
+    # --- Identity ---
     "broker_name": "Broker Name",
+    "brn": "BRN",
     "nationality": "Nationality",
     "agent_specialization": "Specialization",
+    "is_superagent": "Superagent",
     "experience_since": "Experience Since",
     "whatsapp_response_time": "WhatsApp Response Time (s)",
-    "is_superagent": "Superagent",
+    # --- Links ---
+    "agent_url": "Agent URL",
     "agency_url": "Agency URL",
     "agency_registration_number": "Agency Registration Number",
+    # --- Listing counts ---
     "listings_for_sale": "Listings for Sale",
     "listings_for_rent": "Listings for Rent",
     "listings_total": "Total Listings",
     "listings_with_marketing_spend": "Listings with Marketing Spend",
+    # --- Listing calcs (sale/rent paired) ---
     "average_listing_price_sale": "Avg Listing Price (Sale AED)",
     "average_listing_price_rent": "Avg Listing Price (Rent AED)",
     "average_listing_age_days_sale": "Avg Listing Age (Sale days)",
     "average_listing_age_days_rent": "Avg Listing Age (Rent days)",
+    # --- Listing dates ---
     "most_recent_listing_date_sale": "Latest Sale Listing Date",
     "most_recent_listing_date_rent": "Latest Rent Listing Date",
+    # --- Closed deal counts ---
     "closed_transaction_sale": "Closed Sales",
     "closed_transaction_rent": "Closed Rentals",
     "closed_deals_total": "Total Closed Deals",
+    # --- Closed deal financials ---
     "closed_transaction_deal_value": "Closed Deal Value (AED)",
     "closed_transaction_sale_total_amount": "Total Sale Amount (AED)",
     "closed_transaction_rent_total_amount": "Total Rent Amount (AED)",
     "closed_transaction_sale_avg_amount": "Avg Sale Amount (AED)",
     "closed_transaction_rent_avg_amount": "Avg Rent Amount (AED)",
+    # --- Deal activity (dates + monthly volume) ---
     "most_recent_deal_date_sale": "Latest Sale Deal Date",
     "most_recent_deal_date_rent": "Latest Rent Deal Date",
     "average_monthly_deal_volume_sale": "Monthly Sale Deals (Avg)",
     "average_monthly_deal_volume_rent": "Monthly Rent Deals (Avg)",
+    # --- Provenance / metadata (right edge) ---
+    "platform": "Platform",
+    "match_status": "Match Status",
+    "match_confidence": "Match Confidence",
+    "scrape_date": "Scrape Date",
+    "run_id": "Run ID",
 }
 
-# Integrity guard: every column needs a label, in the same order.
-assert tuple(_SHEET_HEADERS.keys()) == _SHEET_COLUMNS, (
-    "_SHEET_HEADERS keys must match _SHEET_COLUMNS order exactly"
+_SHEET_COLUMNS: tuple[str, ...] = tuple(_SHEET_HEADERS.keys())
+
+# Integrity guard: every Sheet column must exist in the brokers table
+# (minus the `raw` blob, which is Postgres-only). Catches typos and
+# drift if Phase 6 / 8 add new fields to items.py without updating
+# both ends.
+_BROKER_COLUMN_SET = set(brokers_repo._BROKER_COLUMNS) - {"raw"}
+_missing_in_brokers = set(_SHEET_COLUMNS) - _BROKER_COLUMN_SET
+_missing_in_sheet = _BROKER_COLUMN_SET - set(_SHEET_COLUMNS)
+assert not _missing_in_brokers, (
+    f"_SHEET_COLUMNS references columns not in brokers table: {_missing_in_brokers}"
+)
+assert not _missing_in_sheet, (
+    f"brokers columns missing from _SHEET_COLUMNS: {_missing_in_sheet}"
 )
 
 
