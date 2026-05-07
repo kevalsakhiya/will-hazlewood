@@ -155,7 +155,9 @@ class GDriveCsvPipeline:
             "gdrive_csv uploaded",
             extra={
                 "file_id": file_id,
-                "name": upload_name,
+                # 'name' would collide with LogRecord.name (the logger
+                # name) → KeyError. Renamed to 'file_name'.
+                "file_name": upload_name,
                 "rows": self._row_count,
                 "bytes": size,
                 "resumable": resumable,

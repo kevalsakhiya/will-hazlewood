@@ -138,6 +138,29 @@ def test_spider_closed_uploads_csv(pipeline, fake_spider, env, mock_drive):
     )
 
 
+def test_success_log_does_not_collide_with_logrecord_attrs(
+    pipeline, fake_spider, env, mock_drive, caplog
+):
+    """Regression: a previous version used `extra={"name": ...}` which
+    collides with LogRecord.name and raises KeyError. The actual upload
+    succeeds but the success log explodes, mismarking status as failed.
+    """
+    import logging as _logging
+
+    pipeline.process_item({"broker_name": "Foo"}, fake_spider)
+    with caplog.at_level(_logging.INFO, logger="broker_scout.pipelines.gdrive_csv"):
+        pipeline.spider_closed(fake_spider, reason="finished")
+
+    # Status must be 'ok' — if the success log threw, the except branch
+    # would have set it to 'failed'.
+    set_calls = fake_spider.crawler.stats.set_value.call_args_list
+    statuses = [
+        c.args[1] for c in set_calls if c.args[0] == "gdrive_csv/upload_status"
+    ]
+    assert "ok" in statuses, f"upload_status never set to ok: {statuses}"
+    assert "failed" not in statuses, "success log raised, status was set to failed"
+
+
 def test_spider_closed_skips_upload_when_no_rows(pipeline, fake_spider, env, mock_drive):
     pipeline.spider_closed(fake_spider, reason="finished")
     mock_drive.files.return_value.create.assert_not_called()
