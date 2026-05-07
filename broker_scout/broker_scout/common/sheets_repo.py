@@ -44,6 +44,67 @@ _SHEET_COLUMNS: tuple[str, ...] = tuple(
     c for c in brokers_repo._BROKER_COLUMNS if c != "raw"
 )
 
+# Display labels for the template spreadsheet's row 1. The pipeline
+# never reads these — they're just what the operator types into the
+# template once. Codified here so the canonical labels survive a
+# template re-creation, and so a future SHEET_COLUMNS reorder forces
+# anyone updating the headers to update both in the same commit.
+#
+# `dict` (insertion-ordered in Py3.7+) instead of a parallel tuple so
+# the column→label mapping is explicit and a missing column fails
+# loudly via the integrity check below.
+_SHEET_HEADERS: dict[str, str] = {
+    "run_id": "Run ID",
+    "scrape_date": "Scrape Date",
+    "platform": "Platform",
+    "brn": "BRN",
+    "match_status": "Match Status",
+    "match_confidence": "Match Confidence",
+    "agent_url": "Agent URL",
+    "broker_name": "Broker Name",
+    "nationality": "Nationality",
+    "agent_specialization": "Specialization",
+    "experience_since": "Experience Since",
+    "whatsapp_response_time": "WhatsApp Response Time (s)",
+    "is_superagent": "Superagent",
+    "agency_url": "Agency URL",
+    "agency_registration_number": "Agency Registration Number",
+    "listings_for_sale": "Listings for Sale",
+    "listings_for_rent": "Listings for Rent",
+    "listings_total": "Total Listings",
+    "listings_with_marketing_spend": "Listings with Marketing Spend",
+    "average_listing_price_sale": "Avg Listing Price (Sale AED)",
+    "average_listing_price_rent": "Avg Listing Price (Rent AED)",
+    "average_listing_age_days_sale": "Avg Listing Age (Sale days)",
+    "average_listing_age_days_rent": "Avg Listing Age (Rent days)",
+    "most_recent_listing_date_sale": "Latest Sale Listing Date",
+    "most_recent_listing_date_rent": "Latest Rent Listing Date",
+    "closed_transaction_sale": "Closed Sales",
+    "closed_transaction_rent": "Closed Rentals",
+    "closed_deals_total": "Total Closed Deals",
+    "closed_transaction_deal_value": "Closed Deal Value (AED)",
+    "closed_transaction_sale_total_amount": "Total Sale Amount (AED)",
+    "closed_transaction_rent_total_amount": "Total Rent Amount (AED)",
+    "closed_transaction_sale_avg_amount": "Avg Sale Amount (AED)",
+    "closed_transaction_rent_avg_amount": "Avg Rent Amount (AED)",
+    "most_recent_deal_date_sale": "Latest Sale Deal Date",
+    "most_recent_deal_date_rent": "Latest Rent Deal Date",
+    "average_monthly_deal_volume_sale": "Monthly Sale Deals (Avg)",
+    "average_monthly_deal_volume_rent": "Monthly Rent Deals (Avg)",
+}
+
+# Integrity guard: every column needs a label, in the same order.
+assert tuple(_SHEET_HEADERS.keys()) == _SHEET_COLUMNS, (
+    "_SHEET_HEADERS keys must match _SHEET_COLUMNS order exactly"
+)
+
+
+def template_header_row() -> list[str]:
+    """The display labels for row 1 of a fresh template spreadsheet,
+    in the same order the pipeline writes data. Operators paste this
+    into A1 of the template once."""
+    return list(_SHEET_HEADERS.values())
+
 # Per-platform display label + env-var names. Two-platform world; a
 # dict beats parameterizing both at every call site.
 _PLATFORM_CONFIG: dict[str, dict[str, str]] = {

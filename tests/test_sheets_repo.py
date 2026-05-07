@@ -117,6 +117,21 @@ def test_to_row_excludes_raw_blob():
     assert "raw" not in sheets_repo._SHEET_COLUMNS
 
 
+def test_template_header_row_matches_columns_in_order():
+    """The display headers paste-list must align 1:1 with the data
+    column order — otherwise data lands under the wrong header."""
+    headers = sheets_repo.template_header_row()
+    assert len(headers) == len(sheets_repo._SHEET_COLUMNS)
+    # every label is non-empty
+    assert all(h and isinstance(h, str) for h in headers)
+
+
+def test_sheet_headers_dict_keys_match_columns_exactly():
+    """Integrity check: a column without a label, or a label without a
+    column, would silently desync data from headers."""
+    assert tuple(sheets_repo._SHEET_HEADERS.keys()) == sheets_repo._SHEET_COLUMNS
+
+
 # ============================================================ get_or_create
 
 

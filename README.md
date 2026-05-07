@@ -33,7 +33,13 @@ The Sheets pipeline (Phase 4) auto-rotates spreadsheets monthly: every month it 
 
 1. **Create the Google Cloud service account** and download its JSON key. Save it locally as `secrets/service_account.json` (or set `SERVICE_ACCOUNT_JSON_PATH` to a different path in `.env`).
 2. **Enable APIs** on the project: Google Sheets API + Google Drive API.
-3. **Create one template spreadsheet per platform** (PropertyFinder, Bayut). Open each, name the first tab `brokers`, fill row 1 with the column headers (matching the order in `broker_scout/broker_scout/common/sheets_repo.py::_SHEET_COLUMNS`), and apply any conditional formatting / frozen-row styling you want preserved across rotations.
+3. **Create one template spreadsheet per platform** (PropertyFinder, Bayut). Open each, name the first tab `brokers`, and fill row 1 with the canonical display headers. Easiest way:
+
+   ```bash
+   poetry run python -c "from broker_scout.common.sheets_repo import template_header_row; print(','.join(template_header_row()))"
+   ```
+
+   Copy the output, paste it into cell A1 of your template, then **Data → Split text to columns** (delimiter: comma). That gives you the right 37 columns in the correct order. Apply any conditional formatting / frozen-row styling you want — those persist across monthly rotations because we copy the template.
 4. **Create one Drive folder per platform** for the rotated monthly spreadsheets to land in.
 5. **Share both** the template spreadsheets *and* the Drive folders with the service account email (visible inside the JSON key as `client_email`) — role: **Editor**.
 6. **Populate `.env`**:
