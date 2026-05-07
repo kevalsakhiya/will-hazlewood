@@ -286,23 +286,24 @@ What's missing (to be added in this phase):
 
 ### 6.2 Matching layer
 
-- [ ] Add `rapidfuzz = "^3.10"` to [pyproject.toml](pyproject.toml). Pure C, fast, well-maintained; standard for fuzzy string matching in Python.
-- [ ] `common/matching.py`:
-  - [ ] `MatchResult` dataclass: `status` (Literal of statuses above), `confidence` (float 0..1), `candidate_url` (str | None), `candidate_brn` (str | None).
-  - [ ] `_normalize_name(s: str) -> str` — lowercase, collapse whitespace, strip punctuation. DLD names are uppercase, PF names are title case; normalize both before comparison.
-  - [ ] `match_candidates(dld_broker: DLDBroker, candidates: list[Candidate]) -> MatchResult`:
-    - [ ] **BRN match** (highest confidence: 1.0): if any candidate exposes a BRN equal to `dld_broker.brn`, pick it. PF rarely exposes BRN in search results — usually a profile-fetch is needed. Pragmatic: skip BRN at the search-result stage; only confirm BRN match after the agent profile has been fetched (post-`parse_agent`). Status promotes from `name_unique`/`name_fuzzy` → `exact_brn` if the parsed BRN matches.
-    - [ ] **Name-unique** (confidence 0.95): exactly one candidate, normalized name equals normalized DLD name.
-    - [ ] **Name-fuzzy** (confidence = ratio/100): exactly one candidate above the configurable `MATCH_FUZZY_THRESHOLD` (default 90); compute via `rapidfuzz.fuzz.token_set_ratio`.
-    - [ ] **Ambiguous**: multiple candidates above the threshold — emit stub, do not pick.
-    - [ ] **Not found**: zero candidates — emit DLD-only stub.
-- [ ] `tests/test_matching.py`:
-  - [ ] BRN tie-break beats name match.
-  - [ ] Name-unique exact match → `confidence=0.95`.
-  - [ ] Token-set ratio works for "Dharam V. Juneja" vs "DHARAM VIR JUNEJA".
-  - [ ] Multiple high-ratio candidates → ambiguous, not picked.
-  - [ ] Empty candidates → not_found.
-  - [ ] Configurable threshold respected (test override).
+- [x] Add `rapidfuzz = "^3.10"` to [pyproject.toml](pyproject.toml). Pure C, fast, well-maintained; standard for fuzzy string matching in Python.
+- [x] `common/matching.py`:
+  - [x] `MatchResult` dataclass: `status` (Literal of statuses), `confidence` (float 0..1), `candidate_url` (str | None), `candidate_brn` (str | None). `Candidate` dataclass for search results.
+  - [x] `_normalize_name(s)` — lowercase, strip punctuation (regex), collapse whitespace.
+  - [x] `match_candidates(dld_broker, candidates, fuzzy_threshold=90) -> MatchResult`:
+    - [x] **Name-unique** (0.95): single candidate, normalized names match exactly.
+    - [x] **Name-fuzzy** (ratio/100): exactly one candidate above threshold via `rapidfuzz.fuzz.token_set_ratio`.
+    - [x] **Ambiguous**: more than one candidate above threshold — no pick.
+    - [x] **Not found**: zero candidates above threshold (or zero candidates total).
+    - [x] DLD with no name (rare): falls back to weak fuzzy / ambiguous instead of crashing.
+  - [x] `promote_to_brn_match(match_result, profile_brn, dld_brn)` — upgrades status to `exact_brn` (confidence 1.0) post-profile-fetch. Idempotent; no-op when BRNs disagree (Phase 9 monitor flags drift).
+- [x] `tests/test_matching.py` — 21 tests, 100% coverage:
+  - [x] Normalization table (uppercase, punctuation, hyphens, parens, None).
+  - [x] BRN promotion (success, missing, disagreement, idempotent).
+  - [x] Name-unique exact, name-fuzzy single, ambiguous, not-found.
+  - [x] Configurable threshold flips not_found ↔ name_fuzzy.
+  - [x] Candidate BRN piped through to result.
+  - [x] No-DLD-name fallback path.
 
 ### 6.3 DLD snapshot loader
 

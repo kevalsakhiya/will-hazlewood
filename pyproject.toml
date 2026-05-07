@@ -21,6 +21,7 @@ google-auth-oauthlib = "^1.2"
 python-json-logger = "^2.0"
 spidermon = "^1.23"
 python-dotenv = "^1.0"
+rapidfuzz = "^3.10"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3"
