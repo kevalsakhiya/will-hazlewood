@@ -132,18 +132,100 @@ Goal: catch bad rows at the boundary, isolate them, keep good rows flowing.
 
 ---
 
-## Phase 4 — Google Sheets pipeline *(separate sheet per website)*
+## Phase 4 — Google Sheets pipeline *(monthly auto-rotation per platform)*
 
-- [ ] `utils/gauth.py` — load service account JSON for Sheets + Drive
-- [ ] `pipelines/gsheets.py`
-  - [ ] Spreadsheet ID per platform (`GSHEET_PF_ID`, `GSHEET_BAYUT_ID`)
-  - [ ] Worksheets: `brokers`, `_runs`, `_coverage`
-  - [ ] Buffer items in memory
-  - [ ] Flush every 2000 items + `close_spider` via `spreadsheets.values.append` (`valueInputOption=RAW`, `insertDataOption=INSERT_ROWS`)
-  - [ ] Header row written once on first run if sheet is empty
-  - [ ] On `close_spider`: append summary row to `_runs` (mirrors Postgres `scrape_runs`)
-- [ ] README: instructions to share each sheet with the service account email
-- [ ] Wire `GSheetsBatchPipeline` at priority `500`
+**Design baseline (locked):** the 10M cells/spreadsheet limit is the binding constraint. At ~30k rows × ~45 cols = 1.35M cells/run, one spreadsheet holds ~7 weekly runs. We rotate to a **new spreadsheet file every month** (~4 runs/month ≈ 5.4M cells, ~54% utilization, leaves headroom for column drift). A new tab inside the same file does **not** help — the 10M cap is per file, not per tab.
+
+Rotation is fully automated end-to-end via the Sheets + Drive APIs (Trigger A: pipeline-driven on `spider_opened`, no separate cron). The operator's only manual step is the **one-time bootstrap**: create one template spreadsheet per platform (with header row pre-populated), share it + a Drive folder with the service account email, set `.env` vars.
+
+### 4.1 Plumbing prerequisites
+
+- [x] `sql/migrations/003_sheet_registry.sql` — new table:
+  ```sql
+  CREATE TABLE sheet_registry (
+      id          BIGSERIAL PRIMARY KEY,
+      platform    TEXT NOT NULL,                   -- 'propertyfinder' | 'bayut'
+      period      TEXT NOT NULL,                   -- 'YYYY-MM', e.g. '2026-05'
+      sheet_id    TEXT NOT NULL,                   -- Google Sheets file id
+      is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (platform, period)
+  );
+  CREATE INDEX ON sheet_registry (platform, is_active);
+  ```
+- [x] `.env.example` — add:
+  - `GSHEET_TEMPLATE_PF_ID`   — template spreadsheet for PF (replaces old `GSHEET_PF_ID`)
+  - `GSHEET_TEMPLATE_BAYUT_ID` — template spreadsheet for Bayut
+  - `GSHEET_PF_FOLDER_ID`     — Drive folder where rotated PF spreadsheets land
+  - `GSHEET_BAYUT_FOLDER_ID`  — same for Bayut
+  - `GSHEET_VIEWER_EMAILS`    — comma-separated emails to auto-share each new file with
+- [x] `utils/gauth.py` — service account loader. Loads JSON from `SERVICE_ACCOUNT_JSON_PATH`, returns Sheets + Drive clients with scopes `spreadsheets` + `drive.file`. Single source of credentials (Phase 5 reuses it).
+
+### 4.2 `common/sheets_repo.py`
+
+Mirrors the column-list / SQL-template pattern from `brokers_repo.py`. Public functions:
+
+- [ ] `get_or_create_active_sheet(platform: str) -> str` — returns the active spreadsheet ID for the current period (`datetime.now(UTC).strftime("%Y-%m")`).
+  - [ ] Look up `(platform, period, is_active=TRUE)` in `sheet_registry`. If found: return.
+  - [ ] If missing: call `drive.files.copy(template_id, body={name: "PropertyFinder Brokers — 2026-05", parents: [folder_id]})`.
+  - [ ] Share the new file: `drive.permissions.create` for each address in `GSHEET_VIEWER_EMAILS` (role=`reader`, type=`user`).
+  - [ ] Insert new registry row, mark prior periods `is_active = FALSE` for this platform.
+  - [ ] Return new sheet ID.
+- [ ] `append_rows(sheet_id: str, rows: list[list]) -> int` — wrapped in `tenacity` retry (5 attempts, exponential backoff up to 60s). Calls `spreadsheets.values.append` with `valueInputOption=RAW`, `insertDataOption=INSERT_ROWS`, `includeValuesInResponse=False`. Returns rows-sent count on success.
+- [ ] `pre_flight_capacity_check(sheet_id: str, incoming_cells: int) -> None` — calls `spreadsheets.get` with `fields=sheets/properties/gridProperties` once per run. Raises `SheetsCapacityError` if `incoming_cells > remaining * 0.9` (10% safety margin). Operator action then: investigate column drift, manually rotate, or shorten rotation cadence.
+
+Constants: `_SHEET_COLUMNS` tuple drives column order. **Excludes** the `raw` JSONB column (Sheets gets the flat view; Postgres keeps the blob). Period format `%Y-%m` is centralized as a constant.
+
+### 4.3 `pipelines/gsheets.py` — `GSheetsBatchPipeline` (priority 500)
+
+Lifecycle mirrors `PostgresPipeline`: signal-based open/close, in-memory buffer, rebind-on-success flush.
+
+- [ ] `from_crawler` — subscribe `spider_opened` + `spider_closed` (not auto-wired methods, same Phase 3 reasoning).
+- [ ] `spider_opened`:
+  - [ ] Read `spider.platform` (defaults to `"propertyfinder"` until Phase 6 sets it on the base spider).
+  - [ ] `self._sheet_id = sheets_repo.get_or_create_active_sheet(platform)` — auto-creates and shares the monthly file if missing.
+  - [ ] Set `crawler.stats["gsheets/sheet_id"]` (Phase 11 alert links use this).
+- [ ] `process_item`:
+  - [ ] Convert dict → flat row via `_to_row(item)` (column order = `_SHEET_COLUMNS`).
+  - [ ] `self._buffer.append(row)`. Flush at `len >= 2000`.
+- [ ] `_flush(spider)`:
+  - [ ] On first call of run: `pre_flight_capacity_check(sheet_id, projected_run_cells)`.
+  - [ ] `rows = self._buffer; sheets_repo.append_rows(sheet_id, rows); self._buffer = []` — rebind only on success so a failed batch is retried with the same data on the next call.
+  - [ ] `crawler.stats.inc_value("gsheets/rows_appended", len(rows))`.
+- [ ] `spider_closed`:
+  - [ ] Final `_flush()` to drain the < 2000 tail.
+  - [ ] On flush failure: log, swallow, set `gsheets/flush_failed = 1`. Do **not** re-raise (Postgres + Drive CSV must finish their close handlers; Phase 12 `tools/replay_run.py` is the recovery path).
+
+Stats emitted (consumed by Phase 9 `PipelineFailureMonitor`):
+- `gsheets/sheet_id` — string, set on first sheet open.
+- `gsheets/rows_appended` — int, must equal `item_scraped_count` for a healthy run.
+- `gsheets/flush_failed` — 0 or 1.
+
+### 4.4 Tests
+
+- [ ] `tests/test_sheets_repo.py` — registry + creation flows mocked at the Drive/Sheets client level:
+  - [ ] `get_or_create_active_sheet` returns existing row when `(platform, period, is_active=TRUE)` exists.
+  - [ ] When missing: calls `drive.files.copy`, then `drive.permissions.create` per viewer, then registers, then deactivates prior periods.
+  - [ ] `append_rows` retries on transient errors, gives up after 5 attempts.
+  - [ ] `pre_flight_capacity_check` raises when projected usage exceeds 90% of remaining cells.
+- [ ] `tests/test_gsheets_pipeline.py` — lifecycle (`sheets_repo` mocked at the pipeline's import path):
+  - [ ] `spider_opened` resolves and caches `sheet_id`.
+  - [ ] `process_item` buffers below threshold, flushes at threshold.
+  - [ ] On flush success: buffer rebound to empty.
+  - [ ] On flush failure: buffer retained for retry.
+  - [ ] `spider_closed` final flush + final-flush-failure does not re-raise; sets `flush_failed` stat.
+
+### 4.5 Bootstrap docs
+
+- [ ] README — one-time setup section:
+  - [ ] Create one template spreadsheet per platform with the column headers in row 1 (matching `_SHEET_COLUMNS`).
+  - [ ] Create one Drive folder per platform for rotated spreadsheets.
+  - [ ] Share both the template and the folder with the service account email (`xxx@xxx.iam.gserviceaccount.com`) as Editor.
+  - [ ] Set `.env` vars listed in §4.1.
+
+### 4.6 Wire pipeline
+
+- [ ] `ITEM_PIPELINES` adds `"broker_scout.pipelines.gsheets.GSheetsBatchPipeline": 500`.
 
 ---
 
@@ -329,6 +411,6 @@ Sheet: <link>  Drive CSV: <link>
 - [ ] Postgres hosting specifics (version, backup, location on his server)
 - [ ] Match thresholds — fuzzy ratio cutoff
 - [ ] Should `match=not_found` rows write to Sheets, or only Postgres?
-- [ ] Sheets rollover policy (annual? trim to last N runs?)
+- [x] ~~Sheets rollover policy~~ — **decided: monthly auto-rotation** (one new spreadsheet file per `YYYY-MM`, ~5.4M cells, 54% utilization with headroom for column drift). Pipeline-driven via `sheet_registry` table; no manual operator action after one-time bootstrap.
 - [ ] Drive folder layout — single vs per-spider folders
 - [ ] Confirm `whatsapp_response_time` rename is acceptable downstream (was `response_time`)
