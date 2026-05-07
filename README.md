@@ -72,7 +72,8 @@ If you're deploying to a server later, you copy `secrets/oauth_token.json` along
    ```
 2. Create two new spreadsheets in your Drive: **PropertyFinder Brokers — TEMPLATE** and **Bayut Brokers — TEMPLATE**. In each, rename the first tab to **`brokers`** (lowercase, exact). Click cell A1, paste the header line from step 1, then **Data → Split text to columns** (delimiter: comma). Apply any frozen-row / conditional formatting you want; it persists through monthly rotations.
 3. Create two folders in your Drive: **PropertyFinder Brokers** and **Bayut Brokers**. Each month's rotated spreadsheet lands here.
-4. No share dialogs needed — your OAuth user already owns these files.
+4. Create one more folder in your Drive: **Broker Scout — CSVs**. The Drive CSV pipeline uploads one CSV file per spider run here as a per-run archive (separate from the monthly Sheets).
+5. No share dialogs needed — your OAuth user already owns these files.
 
 ### 6. Populate `.env`
 
@@ -85,6 +86,8 @@ GSHEET_TEMPLATE_BAYUT_ID=<spreadsheet id from Bayut template URL>
 
 GSHEET_PF_FOLDER_ID=<folder id from PF folder URL>
 GSHEET_BAYUT_FOLDER_ID=<folder id from Bayut folder URL>
+
+GDRIVE_CSV_FOLDER_ID=<folder id from "Broker Scout — CSVs" folder URL>
 
 # Optional: comma-separated emails to auto-share each monthly file with (role: reader).
 GSHEET_VIEWER_EMAILS=

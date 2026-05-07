@@ -233,13 +233,19 @@ Stats emitted (consumed by Phase 9 `PipelineFailureMonitor`):
 
 ## Phase 5 — Google Drive CSV pipeline
 
-- [ ] `pipelines/gdrive_csv.py`
-  - [ ] Per-item write to `out/{spider}_{run_id}.csv`
-  - [ ] On `close_spider`: upload via Drive API, name `{spider}_{YYYYMMDD-HHMM}.csv`
-  - [ ] Resumable upload for files > 5 MB
-  - [ ] Local copy retained 7 days (cron purge — separate)
-- [ ] README: instructions to share Drive folder with the service account email
-- [ ] Wire `GDriveCsvPipeline` at priority `600`
+- [x] `pipelines/gdrive_csv.py`
+  - [x] Per-item write to `out/{spider}_{run_id}.csv`, flushed per row so a mid-run crash leaves a partial file we can recover from.
+  - [x] On `spider_closed`: upload via Drive API, name `{spider}_{YYYYMMDD-HHMMSS}.csv` (UTC).
+  - [x] Resumable upload for files > 5 MB; simple upload below.
+  - [x] Local copy retained 7 days (cron purge — separate).
+  - [x] Header row + data row use the same column order as Sheets (`sheets_repo.template_header_row()` / `to_row`) so a CSV row is byte-identical to a Sheet row — trivial replay.
+- [x] ~~README: instructions to share Drive folder with the service account email~~ — N/A under OAuth user creds; the user already owns the folder.
+- [x] Wire `GDriveCsvPipeline` at priority `600`.
+
+Stats counters emitted (consumed by Phase 9 `PipelineFailureMonitor`):
+- `gdrive_csv/upload_status` — `ok` | `failed` | `skipped` (zero-row run).
+- `gdrive_csv/file_id` — Drive file ID, used by Phase 11 alerts to link the CSV.
+- `gdrive_csv/rows_uploaded` — must equal `item_scraped_count` for a healthy run.
 
 ---
 
