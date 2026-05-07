@@ -268,21 +268,21 @@ What's missing (to be added in this phase):
 
 ### 6.1 Schema, items, migration, repo + sheet wiring (additive, no spider change)
 
-- [ ] `sql/migrations/004_match_columns.sql` — add three columns to `brokers`:
+- [x] `sql/migrations/004_match_columns.sql` — add three columns to `brokers`:
   - `dld_brn TEXT` *(DLD ground truth — useful for forensics: detect when PF's BRN disagrees with DLD)*
   - `dld_broker_name TEXT` *(DLD ground truth name, before normalization)*
   - `agency_name TEXT` *(from DLD `OfficeNameEn`; PF's agency is the URL only)*
-- [ ] Add the three fields to [PropertyFinderBrokerItem](broker_scout/broker_scout/items.py) under a new `# --- match / DLD ground truth ---` block alongside `match_status` and `match_confidence` (which need to be added too — they're not on the dataclass yet).
-- [ ] Update [PropertyFinderBrokerSchema](broker_scout/broker_scout/schemas.py):
-  - [ ] `match_status: Optional[Literal["exact_brn", "name_unique", "name_fuzzy", "ambiguous", "not_found", "unknown"]]`.
-  - [ ] `match_confidence: Optional[float]` with `0 ≤ x ≤ 1`.
-  - [ ] `dld_brn: Optional[str]` non-empty when present (no regex).
-  - [ ] `dld_broker_name: Optional[str]` ≤ 200 chars.
-  - [ ] `agency_name: Optional[str]` ≤ 200 chars.
-- [ ] `brokers_repo._ITEM_COLUMNS` += three new fields (so the per-item INSERT pulls them through).
-- [ ] `sheets_repo._SHEET_HEADERS` += three new fields. **Note for operator**: this changes the column count from 37 → 40, which means re-pasting the header line into the existing template + Split-text-to-columns. Document this in README under "After Phase 6 ships".
-- [ ] `tests/test_schemas.py` += rows in the rejection/acceptance tables for the new fields.
-- [ ] Tick off in this section once the schema migration is applied + tests pass.
+- [x] Add the three fields to [PropertyFinderBrokerItem](broker_scout/broker_scout/items.py) under a new `# --- match / DLD ground truth ---` block alongside `match_status` and `match_confidence` (which were not on the dataclass before).
+- [x] Update [PropertyFinderBrokerSchema](broker_scout/broker_scout/schemas.py):
+  - [x] `match_status: Optional[Literal["exact_brn", "name_unique", "name_fuzzy", "ambiguous", "not_found", "unknown"]]` (typed alias `MatchStatusType` + runtime `MATCH_STATUSES` tuple).
+  - [x] `match_confidence: Optional[float]` with `0 ≤ x ≤ 1`.
+  - [x] `dld_brn: Optional[str]` non-empty when present (no regex).
+  - [x] `dld_broker_name: Optional[str]` ≤ 200 chars.
+  - [x] `agency_name: Optional[str]` ≤ 200 chars.
+- [x] `brokers_repo._ITEM_COLUMNS` += three new fields (so the per-item INSERT pulls them through).
+- [x] `sheets_repo._SHEET_HEADERS` += three new fields **appended at the end** so existing data rows in deployed spreadsheets stay column-aligned. Operator action documented in §6.7.
+- [x] `tests/test_schemas.py` += rows in the rejection/acceptance tables + a guard test that catches drift in `MATCH_STATUSES`.
+- [x] Migration applied to live DB, 208 tests pass, end-to-end spider run still green across all 4 sinks.
 
 ### 6.2 Matching layer
 

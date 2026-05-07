@@ -94,6 +94,12 @@ _SHEET_HEADERS: dict[str, str] = {
     "match_confidence": "Match Confidence",
     "scrape_date": "Scrape Date",
     "run_id": "Run ID",
+    # --- DLD ground truth (appended end-of-row in Phase 6.1) ---
+    # New columns go HERE, not interleaved with existing fields, so old
+    # data rows in already-deployed spreadsheets stay column-aligned.
+    "dld_broker_name": "DLD Broker Name",
+    "dld_brn": "DLD BRN",
+    "agency_name": "Agency Name",
 }
 
 _SHEET_COLUMNS: tuple[str, ...] = tuple(_SHEET_HEADERS.keys())

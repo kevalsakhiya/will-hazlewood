@@ -41,6 +41,9 @@ _ITEM_COLUMNS = (
     "is_superagent",
     "agency_url",
     "agency_registration_number",
+    "dld_brn",                   # Phase 6.1: DLD ground truth
+    "dld_broker_name",
+    "agency_name",
     "listings_for_sale",
     "listings_for_rent",
     "listings_total",

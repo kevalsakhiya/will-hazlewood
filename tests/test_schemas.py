@@ -10,6 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from broker_scout.schemas import (
+    MATCH_STATUSES,
     MAX_AED,
     MAX_LISTING_AGE_DAYS,
     MAX_LISTINGS_PER_BUCKET,
@@ -35,6 +36,11 @@ def test_minimal_payload_passes(make_item):
 def test_fully_populated_payload_passes(make_item):
     today = _today_utc()
     payload = make_item(
+        match_status="exact_brn",
+        match_confidence=0.95,
+        dld_brn="81462",
+        dld_broker_name="Dharam Vir Juneja",
+        agency_name="DVJ Real Estate L.L.C",
         scrape_date=today.isoformat(),
         agent_url="https://www.propertyfinder.ae/en/agent/foo",
         agency_url="https://www.propertyfinder.ae/en/broker/bar",
@@ -127,6 +133,16 @@ REJECTION_CASES = [
     ("most_recent_listing_date_rent", "2099-01-01"),
     ("most_recent_deal_date_sale", "1999-12-31"),
     ("most_recent_deal_date_rent", "2099-01-01"),
+    # Phase 6.1: match / DLD ground truth
+    ("match_status", "totally_made_up"),       # not in Literal set
+    ("match_status", ""),                       # empty string also rejected
+    ("match_confidence", -0.01),
+    ("match_confidence", 1.01),
+    ("dld_brn", ""),
+    ("dld_broker_name", ""),
+    ("dld_broker_name", "x" * 201),
+    ("agency_name", ""),
+    ("agency_name", "x" * 201),
 ]
 
 
@@ -163,7 +179,29 @@ ACCEPTANCE_CASES = [
     ("is_superagent", False),
     ("brn", "1"),
     ("agency_registration_number", "1"),
+    # Phase 6.1: every Literal status is acceptable
+    ("match_status", "exact_brn"),
+    ("match_status", "name_unique"),
+    ("match_status", "name_fuzzy"),
+    ("match_status", "ambiguous"),
+    ("match_status", "not_found"),
+    ("match_status", "unknown"),
+    # Confidence boundaries
+    ("match_confidence", 0.0),
+    ("match_confidence", 1.0),
+    ("dld_brn", "1"),
+    ("dld_broker_name", "X"),
+    ("agency_name", "X"),
 ]
+
+
+def test_all_literal_match_statuses_have_acceptance_rows():
+    """Catch silent drift: if MATCH_STATUSES grows, the parametrize
+    table must grow too."""
+    accepted = {v for f, v in ACCEPTANCE_CASES if f == "match_status"}
+    assert accepted == set(MATCH_STATUSES), (
+        f"missing acceptance rows for: {set(MATCH_STATUSES) - accepted}"
+    )
 
 
 @pytest.mark.parametrize(

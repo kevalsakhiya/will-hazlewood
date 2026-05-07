@@ -36,6 +36,24 @@ SCRAPE_DATE_TOLERANCE_DAYS = 1         # ±1 around today UTC
 
 PF_URL_PREFIX = "https://www.propertyfinder.ae/"
 
+# Valid match statuses produced by the matching layer (Phase 6.2).
+MatchStatusType = Literal[
+    "exact_brn",     # PF profile BRN equals DLD BRN
+    "name_unique",   # exactly one candidate, normalized name matches
+    "name_fuzzy",    # exactly one candidate above fuzzy threshold
+    "ambiguous",     # >1 plausible candidate — emit stub, don't pick
+    "not_found",     # zero candidates — emit DLD-only stub
+    "unknown",       # default before matching runs / pre-Phase-6 data
+]
+MATCH_STATUSES: tuple[str, ...] = (
+    "exact_brn",
+    "name_unique",
+    "name_fuzzy",
+    "ambiguous",
+    "not_found",
+    "unknown",
+)
+
 _DATE_FIELDS_PARSED = (
     "scrape_date",
     "most_recent_listing_date_sale",
@@ -126,6 +144,13 @@ class PropertyFinderBrokerSchema(BaseModel):
     agency_registration_number: Annotated[
         Optional[str], Field(min_length=1, max_length=100)
     ] = None
+
+    # --- match / DLD ground truth ---
+    match_status: Optional[MatchStatusType] = None
+    match_confidence: Annotated[Optional[float], Field(ge=0, le=1)] = None
+    dld_brn: Annotated[Optional[str], Field(min_length=1)] = None
+    dld_broker_name: Annotated[Optional[str], Field(min_length=1, max_length=200)] = None
+    agency_name: Annotated[Optional[str], Field(min_length=1, max_length=200)] = None
 
     # --- listing counts ---
     listings_for_sale: Annotated[

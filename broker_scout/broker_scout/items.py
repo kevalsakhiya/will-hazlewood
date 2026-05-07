@@ -21,6 +21,13 @@ class PropertyFinderBrokerItem:
     agency_url: Optional[str] = None
     agency_registration_number: Optional[str] = None
 
+    # --- match / DLD ground truth (populated by Phase 6 matching layer) ---
+    match_status: Optional[str] = None         # exact_brn|name_unique|name_fuzzy|ambiguous|not_found|unknown
+    match_confidence: Optional[float] = None   # 0..1
+    dld_brn: Optional[str] = None              # DLD CardNumber
+    dld_broker_name: Optional[str] = None      # DLD CardHolderNameEn (pre-normalization)
+    agency_name: Optional[str] = None          # DLD OfficeNameEn
+
     # --- listing counts ---
     listings_for_sale: Optional[int] = None
     listings_for_rent: Optional[int] = None
