@@ -165,14 +165,14 @@ Rotation is fully automated end-to-end via the Sheets + Drive APIs (Trigger A: p
 
 Mirrors the column-list / SQL-template pattern from `brokers_repo.py`. Public functions:
 
-- [ ] `get_or_create_active_sheet(platform: str) -> str` — returns the active spreadsheet ID for the current period (`datetime.now(UTC).strftime("%Y-%m")`).
-  - [ ] Look up `(platform, period, is_active=TRUE)` in `sheet_registry`. If found: return.
-  - [ ] If missing: call `drive.files.copy(template_id, body={name: "PropertyFinder Brokers — 2026-05", parents: [folder_id]})`.
-  - [ ] Share the new file: `drive.permissions.create` for each address in `GSHEET_VIEWER_EMAILS` (role=`reader`, type=`user`).
-  - [ ] Insert new registry row, mark prior periods `is_active = FALSE` for this platform.
-  - [ ] Return new sheet ID.
-- [ ] `append_rows(sheet_id: str, rows: list[list]) -> int` — wrapped in `tenacity` retry (5 attempts, exponential backoff up to 60s). Calls `spreadsheets.values.append` with `valueInputOption=RAW`, `insertDataOption=INSERT_ROWS`, `includeValuesInResponse=False`. Returns rows-sent count on success.
-- [ ] `pre_flight_capacity_check(sheet_id: str, incoming_cells: int) -> None` — calls `spreadsheets.get` with `fields=sheets/properties/gridProperties` once per run. Raises `SheetsCapacityError` if `incoming_cells > remaining * 0.9` (10% safety margin). Operator action then: investigate column drift, manually rotate, or shorten rotation cadence.
+- [x] `get_or_create_active_sheet(platform: str) -> str` — returns the active spreadsheet ID for the current period (`datetime.now(UTC).strftime("%Y-%m")`).
+  - [x] Look up `(platform, period, is_active=TRUE)` in `sheet_registry`. If found: return.
+  - [x] If missing: call `drive.files.copy(template_id, body={name: "PropertyFinder Brokers — 2026-05", parents: [folder_id]})`.
+  - [x] Share the new file: `drive.permissions.create` for each address in `GSHEET_VIEWER_EMAILS` (role=`reader`, type=`user`).
+  - [x] Insert new registry row (handles concurrent-creation race via `ON CONFLICT DO NOTHING` + re-SELECT), mark prior periods `is_active = FALSE` for this platform.
+  - [x] Return new sheet ID.
+- [x] `append_rows(sheet_id: str, rows: list[list]) -> int` — wrapped in `tenacity` retry (5 attempts, exponential backoff up to 60s, only on 5xx/429). Calls `spreadsheets.values.append` with `valueInputOption=RAW`, `insertDataOption=INSERT_ROWS`, `includeValuesInResponse=False`. Returns rows-sent count on success.
+- [x] `pre_flight_capacity_check(sheet_id: str, expected_run_cells: int) -> None` — calls `spreadsheets.get` with `fields=sheets/properties/gridProperties` once per run. Raises `SheetsCapacityError` if `expected_run_cells > remaining * 0.9` (10% safety margin). Operator action then: investigate column drift, manually rotate, or shorten rotation cadence.
 
 Constants: `_SHEET_COLUMNS` tuple drives column order. **Excludes** the `raw` JSONB column (Sheets gets the flat view; Postgres keeps the blob). Period format `%Y-%m` is centralized as a constant.
 
