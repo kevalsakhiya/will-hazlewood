@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 
-from psycopg.rows import tuple_row
+from psycopg.rows import dict_row, tuple_row
 
 from broker_scout.common.db import get_pool
 from broker_scout.common.dld_models import DLDBroker
@@ -91,6 +91,37 @@ def upsert_brokers(brokers: Iterable[DLDBroker], run_id: str) -> tuple[int, int]
         inserted + updated,
     )
     return inserted, updated
+
+
+_SELECT_COLS = ", ".join(_COLUMNS)
+_SELECT_ALL_SQL = f"SELECT {_SELECT_COLS} FROM dld_brokers"
+_SELECT_BY_RUN_SQL = (
+    f"SELECT {_SELECT_COLS} FROM dld_brokers WHERE last_seen_run_id = %s"
+)
+
+
+def iter_active_brokers(run_id: str | None = None) -> Iterator[DLDBroker]:
+    """Yield DLDBroker rows from Postgres for the spider to seed from.
+
+    Args:
+        run_id: when set, only yield brokers whose `last_seen_run_id`
+                equals this run (i.e. those present in the most recent
+                fetch). Default yields the entire `dld_brokers` table —
+                appropriate when we want the full registry, not just
+                this-week's snapshot, since brokers occasionally drop
+                out of one DLD response and reappear in the next.
+
+    Streams via the cursor iterator so a 30k-row table stays modest in
+    memory (~a few MB).
+    """
+    pool = get_pool()
+    with pool.connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        if run_id is None:
+            cur.execute(_SELECT_ALL_SQL)
+        else:
+            cur.execute(_SELECT_BY_RUN_SQL, (run_id,))
+        for row in cur:
+            yield DLDBroker(**row)
 
 
 def _flush(cur, rows: list[dict]) -> tuple[int, int]:

@@ -307,9 +307,10 @@ What's missing (to be added in this phase):
 
 ### 6.3 DLD snapshot loader
 
-- [ ] `common/dld_repo.py` += `iter_active_brokers() -> Iterator[DLDBroker]` reading every row from the `dld_brokers` table. Postgres is the source of truth; the JSONL snapshots are an audit trail / backup, not the spider's input.
-- [ ] Optionally (defer if not needed): load only rows where `last_seen_run_id` is the most-recent run. Default behavior reads all rows — DLD is broker license registry, expired brokers are still meaningful.
-- [ ] `tests/test_dld_repo.py` += a test for `iter_active_brokers` with mocked cursor returning multiple rows.
+- [x] `common/dld_repo.py` += `iter_active_brokers(run_id=None) -> Iterator[DLDBroker]` streaming rows from `dld_brokers` via `dict_row` cursor (lazy iteration so 30k+ rows don't materialize all at once).
+- [x] Optional `run_id` filter: when set, restricts to brokers seen in that specific fetch run. Default reads the whole registry.
+- [x] `tests/test_dld_repo.py` — 6 tests covering: yields DLDBroker dataclass, empty result, default vs run-filtered SQL shape, lazy streaming (constructing the generator doesn't pull rows), and that `dict_row` factory is configured.
+- [x] Live sanity: `iter_active_brokers()` against the populated DB returns 33,793 brokers.
 
 ### 6.4 `BaseBrokerSpider` + `agent_spider` refactor
 
