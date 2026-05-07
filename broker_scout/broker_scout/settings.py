@@ -35,3 +35,12 @@ CONCURRENT_REQUESTS_PER_DOMAIN = 1
 DOWNLOAD_DELAY = 1
 
 FEED_EXPORT_ENCODING = "utf-8"
+
+# Phase 6 — DLD-seeded spider tunables
+# Optional smoke-test cap: only seed N DLD brokers per run. Unset/0 = full registry.
+DLD_LIMIT = int(os.getenv("DLD_LIMIT", "0"))
+# Comma-separated BRNs. When set, only these DLD brokers seed the
+# spider — useful for replay or focused dev testing.
+DLD_BRN_FILTER = os.getenv("DLD_BRN_FILTER", "")
+# rapidfuzz token-set ratio cutoff for name-fuzzy matches (0..100).
+MATCH_FUZZY_THRESHOLD = int(os.getenv("MATCH_FUZZY_THRESHOLD", "90"))

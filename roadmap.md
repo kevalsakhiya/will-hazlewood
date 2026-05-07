@@ -314,39 +314,29 @@ What's missing (to be added in this phase):
 
 ### 6.4 `BaseBrokerSpider` + `agent_spider` refactor
 
-- [ ] `spiders/base.py` — `BaseBrokerSpider(Spider)`:
-  - [ ] Class-level `platform: str = ""` (subclass overrides; `agent_spider` sets `"propertyfinder"`).
-  - [ ] `start_requests`: iterate `dld_repo.iter_active_brokers()`, call `self.search_for_broker(dld_broker)` per row, yield from each.
-  - [ ] Abstract method `search_for_broker(self, dld_broker: DLDBroker) -> Iterable[Request]` — subclass implements platform-specific search URL.
-  - [ ] Abstract method `parse_search_results(self, response, dld_broker)` — receives `dld_broker` via `cb_kwargs`. Subclass extracts candidate list, calls `matching.match_candidates(dld_broker, candidates)`, emits one of:
-    - matched → request for the candidate's profile, carrying `dld_broker` + `match_result` via `cb_kwargs`.
-    - ambiguous → emit stub item with `match_status="ambiguous"`.
-    - not_found → emit stub item with `match_status="not_found"`.
-- [ ] Refactor [spiders/agent_spider.py](broker_scout/broker_scout/spiders/agent_spider.py):
-  - [ ] Inherit from `BaseBrokerSpider`; remove the hardcoded name + start_urls.
-  - [ ] `search_for_broker(dld_broker)` builds the PF search URL from `dld_broker.broker_name_en` (or `_ar` fallback).
-  - [ ] `parse_search_results(response, dld_broker)` extracts all candidates from the `<div data-testid="AgentList">`, builds a `Candidate(name, url, brn=None)` list, calls `matching.match_candidates(...)`, and either:
-    - yields the match's profile request → `parse_agent`, carrying `(dld_broker, match_result)`.
-    - yields an ambiguous/not_found stub item directly.
-  - [ ] `parse_agent` receives `dld_broker` + `match_result` from `cb_kwargs`. Sets:
-    - `item.match_status = match_result.status` (may be promoted to `exact_brn` here if PF's BRN matches DLD's).
-    - `item.match_confidence = match_result.confidence`.
-    - `item.dld_brn`, `item.dld_broker_name`, `item.agency_name` from `dld_broker`.
-  - [ ] Stub-item helper (`_emit_dld_stub(dld_broker, status)`) for ambiguous + not_found rows so they go through the same validation pipeline.
-- [ ] Existing parse chain (`parse_agency`, `parse_property`, etc.) untouched aside from threading `dld_broker` + `match_result` through cb_kwargs.
+- [x] `spiders/base.py` — `BaseBrokerSpider(Spider)`:
+  - [x] Class-level `platform: str = ""` (subclass overrides; `agent_spider` sets `"propertyfinder"`).
+  - [x] `start_requests` issues an optional `warmup_url` GET first (PF rejects `/search?text=` with 404 unless session cookies are seeded), then `_dispatch_dld_searches` fans out one search per DLD broker via `search_for_broker`. Nameless brokers short-circuit to a `not_found` stub.
+  - [x] Abstract `search_for_broker(dld_broker)`. Abstract `parse_search_results(response, dld_broker)`.
+  - [x] `_make_dld_stub(dld_broker, status, confidence)` produces a schema-valid item dict for ambiguous / not_found.
+- [x] Refactor [spiders/agent_spider.py](broker_scout/broker_scout/spiders/agent_spider.py):
+  - [x] Inherits `BaseBrokerSpider`; `start_urls` and the hardcoded `parse` method removed.
+  - [x] `warmup_url = "https://www.propertyfinder.ae/en/find-agent"`. `handle_httpstatus_list = [404]` so empty-result searches reach the callback.
+  - [x] `search_for_broker(dld_broker)` builds the search URL from `broker_name_en` (or `_ar` fallback).
+  - [x] `parse_search_results(response, dld_broker)` extracts candidates via `data-testid="agent-card-link"` (PF's anchor is empty; the broker name lives in the `title` attribute), runs `match_candidates`, increments `match/{status}` stats, and either yields the matched profile request or emits a stub.
+  - [x] `parse_agent(response, dld_broker, match_result)` receives match context via `cb_kwargs`. After extracting BRN, calls `promote_to_brn_match` and sets `item.match_status / .match_confidence / .dld_brn / .dld_broker_name / .agency_name`.
+- [x] Existing parse chain (`parse_agency`, `parse_property`) untouched — `item` carries the match metadata forward via meta as before.
 
 ### 6.5 Tests + verification
 
-- [ ] `tests/test_base_spider.py`:
-  - [ ] `start_requests` calls `iter_active_brokers` and routes each broker through `search_for_broker`.
-  - [ ] Stub-item helper produces a dict that passes `PropertyFinderBrokerSchema`.
-- [ ] Refactor existing live smoke: replace `CLOSESPIDER_ITEMCOUNT=1` with a small fixed DLD subset (e.g. set `DLD_LIMIT=5` env var, spider tops out start_requests). Validates the matched/ambiguous/not_found distribution lands in Postgres + Sheets + Drive correctly.
-- [ ] Confirm at the DB level: `SELECT match_status, count(*) FROM brokers WHERE run_id=...GROUP BY match_status;` shows the expected mix.
+- [x] `tests/test_base_spider.py` — 9 tests: dispatch counts, DLD_LIMIT cap, no-name short-circuit to stub, stub schema validation, DLD ground-truth fields populated correctly, Arabic-name fallback, default-platform fallback, warmup-request shape, and that `_dispatch_dld_searches` fans out as expected.
+- [x] Live smoke: `DLD_LIMIT=10` and `DLD_BRN_FILTER=81462` runs both verified end-to-end. Dharam Vir Juneja matches as `exact_brn` with confidence 1.0, BRN agreement between PF and DLD, `match/promoted_to_exact_brn=1` stat fires.
 
 ### 6.6 Settings exposed
 
-- [ ] `MATCH_FUZZY_THRESHOLD` in `settings.py` (default 90), surfaced via `crawler.settings.getfloat(...)` in `matching.py`.
-- [ ] `DLD_LIMIT` (optional int) — when set, `BaseBrokerSpider.start_requests` stops after that many DLD brokers. For dev / smoke testing without scraping the full 30k.
+- [x] `MATCH_FUZZY_THRESHOLD` in `settings.py` (default 90, env-overridable). Read by the spider via `self.crawler.settings.getint(...)` and passed into `match_candidates`.
+- [x] `DLD_LIMIT` (env-overridable int). When set, `BaseBrokerSpider._dispatch_dld_searches` caps to that many brokers via `itertools.islice`.
+- [x] `DLD_BRN_FILTER` (env-overridable comma-separated BRNs). When set, only those DLD brokers seed the spider — useful for replay or focused dev testing without modifying code.
 
 ### 6.7 Operator notes (after Phase 6 ships)
 

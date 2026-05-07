@@ -1,11 +1,21 @@
 import json
 from datetime import datetime, timezone
+from typing import Iterable
 from urllib.parse import quote_plus
 
 import jmespath
-from scrapy import Request, Spider
+from scrapy import Request
 
+from broker_scout.common.dld_models import DLDBroker
+from broker_scout.common.matching import (
+    DEFAULT_FUZZY_THRESHOLD,
+    Candidate,
+    MatchResult,
+    match_candidates,
+    promote_to_brn_match,
+)
 from broker_scout.items import ListingAggState, PropertyFinderBrokerItem
+from broker_scout.spiders.base import BaseBrokerSpider
 
 
 LISTING_API_HEADERS = {
@@ -40,28 +50,90 @@ def _listings_url(agent_id: str | int, page: int) -> str:
     )
 
 
-class AgentSpider(Spider):
+class AgentSpider(BaseBrokerSpider):
     name = "agent_spider"
-    start_urls = ["https://www.propertyfinder.ae/en/find-agent"]
+    platform = "propertyfinder"
+    # PF rejects bare /search?text=... with 404 unless session cookies
+    # are present — fetch the agent landing page once at run start so
+    # CookieMiddleware seeds the jar for every search that follows.
+    warmup_url = "https://www.propertyfinder.ae/en/find-agent"
+    # PF returns 404 for searches that match nothing — let those reach
+    # parse_search_results so we can emit a not_found stub.
+    handle_httpstatus_list = [404]
 
-    def parse(self, response):
-        agent_name = "DHARAM VIR JUNEJA"
+    # ------------------------------------------------------------------ DLD seeding
+
+    def search_for_broker(self, dld_broker: DLDBroker) -> Iterable[Request]:
+        name = dld_broker.broker_name_en or dld_broker.broker_name_ar
         url = (
             "https://www.propertyfinder.ae/en/find-agent/search"
-            f"?text={quote_plus(agent_name)}"
+            f"?text={quote_plus(name)}"
         )
-        yield Request(url=url, callback=self.parse_search_results)
+        yield Request(
+            url=url,
+            callback=self.parse_search_results,
+            cb_kwargs={"dld_broker": dld_broker},
+        )
 
-    def parse_search_results(self, response):
-        agent_urls = response.xpath(
-            './/div[@data-testid="AgentList"]//li//a/@href'
-        ).getall()
-        for agent_url in agent_urls:
-            yield Request(url=response.urljoin(agent_url), callback=self.parse_agent)
+    def parse_search_results(self, response, dld_broker: DLDBroker):
+        # 404 = PF found nothing → empty candidate list → not_found stub.
+        # Other 4xx/5xx still propagate normally; we only opt in to 404
+        # via handle_httpstatus_list above.
+        if response.status == 404:
+            candidates: list[Candidate] = []
+        else:
+            candidates = self._extract_candidates(response)
+        threshold = self.crawler.settings.getint(
+            "MATCH_FUZZY_THRESHOLD", DEFAULT_FUZZY_THRESHOLD
+        )
+        result = match_candidates(dld_broker, candidates, fuzzy_threshold=threshold)
+
+        self.crawler.stats.inc_value(f"match/{result.status}")
+
+        if result.candidate_url is None:
+            # not_found / ambiguous → emit DLD-only stub
+            yield self._make_dld_stub(
+                dld_broker, status=result.status, confidence=result.confidence
+            )
+            return
+
+        # matched → fetch the candidate's profile page; thread match
+        # context via meta so the existing parse_agent → parse_agency
+        # → parse_property chain can carry it forward without API
+        # changes to those callbacks beyond reading from meta.
+        yield Request(
+            url=response.urljoin(result.candidate_url),
+            callback=self.parse_agent,
+            cb_kwargs={"dld_broker": dld_broker, "match_result": result},
+        )
+
+    @staticmethod
+    def _extract_candidates(response) -> list[Candidate]:
+        """Pull (name, url) pairs out of the agent-list panel.
+
+        PF's agent-card anchor has no text content — the broker name is
+        in the `title` attribute (and `aria-label` as fallback). We use
+        the per-card `data-testid="agent-card-link"` rather than the
+        outer AgentList → li → a path so structure tweaks below the
+        list-card boundary don't break extraction.
+        """
+        out: list[Candidate] = []
+        for a in response.xpath('.//a[@data-testid="agent-card-link"]'):
+            url = a.xpath('./@href').get()
+            name = (a.xpath('./@title').get() or "").strip()
+            if not url or not name:
+                continue
+            out.append(Candidate(name=name, url=response.urljoin(url)))
+        return out
 
     # ------------------------------------------------------------------ parse_agent
 
-    def parse_agent(self, response):
+    def parse_agent(
+        self,
+        response,
+        dld_broker: DLDBroker,
+        match_result: MatchResult,
+    ):
         next_data = json.loads(
             response.xpath('.//script[@id="__NEXT_DATA__"]/text()').get()
         )
@@ -76,6 +148,19 @@ class AgentSpider(Spider):
         self._extract_listing_counts(item, agent_data)
         self._extract_closed_transactions(item, agent_data)
         self._extract_deal_history(item, agent_data)
+
+        # Promote name match → exact_brn if PF's BRN agrees with DLD's.
+        # No-op when BRNs disagree (Phase 9 monitor flags drift).
+        match_result = promote_to_brn_match(
+            match_result, profile_brn=item.brn, dld_brn=dld_broker.brn
+        )
+        if match_result.status == "exact_brn":
+            self.crawler.stats.inc_value("match/promoted_to_exact_brn")
+        item.match_status = match_result.status
+        item.match_confidence = match_result.confidence
+        item.dld_brn = dld_broker.brn
+        item.dld_broker_name = dld_broker.broker_name_en or dld_broker.broker_name_ar
+        item.agency_name = dld_broker.office_name_en or dld_broker.office_name_ar
 
         agent_id = jmespath.search("id", agent_data)
         agency_slug = jmespath.search("broker.slug", agent_data)
