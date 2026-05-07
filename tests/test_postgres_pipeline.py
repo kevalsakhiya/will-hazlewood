@@ -35,13 +35,33 @@ def repo_mock():
         yield m
 
 
-# ------------------------------------------------------------- open_spider
+# ----------------------------------------------------------- spider_opened
 
 
-def test_open_spider_opens_run(repo_mock, fake_spider):
+def test_spider_opened_opens_run(repo_mock, fake_spider):
     p = PostgresPipeline()
-    p.open_spider(fake_spider)
+    p.spider_opened(fake_spider)
     repo_mock.open_run.assert_called_once_with("run-abc", "agent_spider")
+
+
+def test_spider_opened_idempotent(repo_mock, fake_spider):
+    """Calling spider_opened twice must not double-create the scrape_runs row."""
+    p = PostgresPipeline()
+    p.spider_opened(fake_spider)
+    p.spider_opened(fake_spider)
+    repo_mock.open_run.assert_called_once()
+
+
+def test_open_run_deferred_when_run_id_missing(repo_mock):
+    """If RunIdExtension hasn't fired yet, _ensure_run_opened should be a no-op."""
+
+    class StubSpider:
+        name = "agent_spider"
+        # no run_id attr
+
+    p = PostgresPipeline()
+    p.spider_opened(StubSpider())
+    repo_mock.open_run.assert_not_called()
 
 
 # ------------------------------------------------------------- process_item
@@ -49,7 +69,7 @@ def test_open_spider_opens_run(repo_mock, fake_spider):
 
 def test_process_item_buffers_below_batch_size(repo_mock, fake_spider):
     p = PostgresPipeline(batch_size=3)
-    p.open_spider(fake_spider)
+    p.spider_opened(fake_spider)
     p.process_item({"a": 1}, fake_spider)
     p.process_item({"a": 2}, fake_spider)
     repo_mock.insert_brokers.assert_not_called()
@@ -57,7 +77,7 @@ def test_process_item_buffers_below_batch_size(repo_mock, fake_spider):
 
 def test_process_item_flushes_at_batch_size(repo_mock, fake_spider):
     p = PostgresPipeline(batch_size=3)
-    p.open_spider(fake_spider)
+    p.spider_opened(fake_spider)
     repo_mock.insert_brokers.return_value = 3
     p.process_item({"a": 1}, fake_spider)
     p.process_item({"a": 2}, fake_spider)
@@ -72,7 +92,7 @@ def test_process_item_flushes_at_batch_size(repo_mock, fake_spider):
 
 def test_process_item_returns_item_unchanged(repo_mock, fake_spider):
     p = PostgresPipeline()
-    p.open_spider(fake_spider)
+    p.spider_opened(fake_spider)
     item = {"brn": "1"}
     out = p.process_item(item, fake_spider)
     assert out is item
@@ -83,7 +103,7 @@ def test_process_item_returns_item_unchanged(repo_mock, fake_spider):
 
 def test_spider_closed_flushes_and_closes_run_ok(repo_mock, fake_spider):
     p = PostgresPipeline(batch_size=10)
-    p.open_spider(fake_spider)
+    p.spider_opened(fake_spider)
     p.process_item({"brn": "1"}, fake_spider)
     p.process_item({"brn": "2"}, fake_spider)
     fake_spider.crawler.stats.get_stats.return_value = {
@@ -106,18 +126,35 @@ def test_spider_closed_flushes_and_closes_run_ok(repo_mock, fake_spider):
     assert kwargs["stats"]["start_time"] == "2026-05-06T12:00:00"
 
 
-def test_spider_closed_marks_failed_when_reason_not_finished(
-    repo_mock, fake_spider
+@pytest.mark.parametrize(
+    "reason",
+    ["closespider_errorcount", "shutdown", "cancelled", "unexpected"],
+)
+def test_spider_closed_marks_failed_for_bad_reasons(
+    repo_mock, fake_spider, reason
 ):
     p = PostgresPipeline()
-    p.open_spider(fake_spider)
-    p.spider_closed(fake_spider, reason="closespider_errorcount")
+    p.spider_opened(fake_spider)
+    p.spider_closed(fake_spider, reason=reason)
     assert repo_mock.close_run.call_args.kwargs["status"] == "failed"
+
+
+@pytest.mark.parametrize(
+    "reason",
+    ["finished", "closespider_itemcount", "closespider_pagecount", "closespider_timeout"],
+)
+def test_spider_closed_marks_ok_for_deliberate_close(
+    repo_mock, fake_spider, reason
+):
+    p = PostgresPipeline()
+    p.spider_opened(fake_spider)
+    p.spider_closed(fake_spider, reason=reason)
+    assert repo_mock.close_run.call_args.kwargs["status"] == "ok"
 
 
 def test_spider_closed_drains_bad_items(repo_mock, fake_spider):
     p = PostgresPipeline()
-    p.open_spider(fake_spider)
+    p.spider_opened(fake_spider)
     fake_spider.bad_items = [
         {"run_id": "run-abc", "platform": "propertyfinder", "reason": "x", "payload": {}}
     ]
@@ -132,7 +169,7 @@ def test_spider_closed_drains_bad_items(repo_mock, fake_spider):
 
 def test_spider_closed_skips_bad_items_when_empty(repo_mock, fake_spider):
     p = PostgresPipeline()
-    p.open_spider(fake_spider)
+    p.spider_opened(fake_spider)
     p.spider_closed(fake_spider, reason="finished")
     repo_mock.insert_bad_items.assert_not_called()
 
@@ -143,7 +180,7 @@ def test_spider_closed_close_run_runs_even_if_flush_raises(
     """A failed broker flush must propagate but `close_run` still fires
     so the run isn't left as 'running' forever."""
     p = PostgresPipeline()
-    p.open_spider(fake_spider)
+    p.spider_opened(fake_spider)
     p._broker_buffer.append({"brn": "1"})
     repo_mock.insert_brokers.side_effect = RuntimeError("DB exploded")
 

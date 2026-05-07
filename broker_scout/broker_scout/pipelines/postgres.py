@@ -17,6 +17,19 @@ from broker_scout.common import brokers_repo
 
 logger = logging.getLogger(__name__)
 
+# Reasons we treat as successful: the spider met a deliberate stop
+# condition. `closespider_errorcount` is excluded because it indicates
+# the error threshold was hit (a real signal). `cancelled` / `shutdown`
+# are SIGINT/process-kill — also failures.
+SUCCESSFUL_REASONS = frozenset(
+    {
+        "finished",
+        "closespider_itemcount",
+        "closespider_pagecount",
+        "closespider_timeout",
+    }
+)
+
 
 def _jsonable_stats(stats: dict) -> dict:
     """Coerce Scrapy stats values into JSON-safe shapes.
@@ -59,23 +72,34 @@ class PostgresPipeline:
     @classmethod
     def from_crawler(cls, crawler):
         pipe = cls()
-        # spider_closed signal carries `reason`; the auto-wired close_spider
-        # method does not. Connect explicitly so we can mark status correctly.
+        # Use signals rather than the auto-wired open_spider/close_spider
+        # methods. Reasons:
+        #   * spider_closed carries `reason`, the method does not.
+        #   * The auto-wired open_spider runs *before* the spider_opened
+        #     signal fires, so RunIdExtension.spider_opened hasn't yet
+        #     set spider.run_id. Subscribing via the signal puts us in
+        #     line *after* RunIdExtension (extensions register first).
+        crawler.signals.connect(pipe.spider_opened, signal=signals.spider_opened)
         crawler.signals.connect(pipe.spider_closed, signal=signals.spider_closed)
         return pipe
 
-    def open_spider(self, spider) -> None:
-        self._run_id = spider.run_id
-        self._scrape_date = spider.scrape_date
-        brokers_repo.open_run(self._run_id, spider.name)
+    def spider_opened(self, spider) -> None:
+        self._ensure_run_opened(spider)
 
     def process_item(self, item: dict, spider) -> dict:
+        # Defensive: if the open signal somehow fired in a different order,
+        # this still creates the run before we try to insert FK-bound rows.
+        self._ensure_run_opened(spider)
         self._broker_buffer.append(item)
         if len(self._broker_buffer) >= self._batch_size:
             self._flush_brokers(spider)
         return item
 
     def spider_closed(self, spider, reason: str) -> None:
+        # If the spider opened normally, this is a no-op. If it died before
+        # spider_opened fired, we still want a row in scrape_runs so the
+        # failure is recorded.
+        self._ensure_run_opened(spider)
         flush_failed = False
         try:
             self._flush_brokers(spider)
@@ -85,7 +109,11 @@ class PostgresPipeline:
             raise
         finally:
             stats_dict = dict(spider.crawler.stats.get_stats())
-            status = "failed" if flush_failed or reason != "finished" else "ok"
+            status = (
+                "failed"
+                if flush_failed or reason not in SUCCESSFUL_REASONS
+                else "ok"
+            )
             brokers_repo.close_run(
                 run_id=self._run_id,
                 status=status,
@@ -94,11 +122,19 @@ class PostgresPipeline:
                 stats=_jsonable_stats(stats_dict),
             )
 
+    def _ensure_run_opened(self, spider) -> None:
+        if self._run_id is not None:
+            return
+        run_id = getattr(spider, "run_id", None)
+        if run_id is None:
+            return  # extension hasn't run yet; try again next call
+        self._run_id = run_id
+        self._scrape_date = getattr(spider, "scrape_date", None)
+        brokers_repo.open_run(self._run_id, spider.name)
+
     def _flush_brokers(self, spider) -> None:
         if not self._broker_buffer:
             return
-        # Rebind before handoff so the buffer we passed to the repo isn't
-        # later mutated (matters for caller-side reference tracking).
         items = self._broker_buffer
         self._broker_buffer = []
         n = brokers_repo.insert_brokers(items, self._run_id, self._scrape_date)
