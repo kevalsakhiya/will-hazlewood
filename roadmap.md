@@ -401,17 +401,22 @@ Three suites (validation, periodic, close) wired via `extensions.py`. Most monit
 
 ### 9.0 Plumbing prerequisites
 
-- [ ] Confirm `spidermon = "^1.23"` is pinned in [pyproject.toml](pyproject.toml) *(it is, since Phase 0).*
-- [ ] Create `broker_scout/monitors/` package: `__init__.py`, `monitors.py`, `coverage_tiers.py`, `actions.py` *(actions.py grows real notifiers in Phase 11; Phase 9 ships a `LogOnlyAction` placeholder so monitor failures surface in logs).*
-- [ ] Wire Spidermon in `extensions.py`: enable extension + register the three suites.
-- [ ] Add Spidermon settings to `settings.py`:
+- [x] `spidermon` pinned (currently `1.25.1`; pin in [pyproject.toml](pyproject.toml) since Phase 0 — `^1.23` is satisfied).
+- [x] `broker_scout/monitors/` package created: `__init__.py`, `monitors.py`, `coverage_tiers.py`, `actions.py`.
+- [x] `LogOnlyAction` ships as a from-scratch `spidermon.core.actions.Action` (avoids `spidermon.contrib.actions` which would pull in `jinja2`).
+- [x] Spidermon extension enabled at priority 500 in `EXTENSIONS` (after `RunIdExtension` at 100 so `spider.run_id` is set before any monitor reads stats).
+- [x] Settings wired:
   - `SPIDERMON_ENABLED = True`
-  - `SPIDERMON_VALIDATION_MODELS = {...}` *(uses our pydantic schema)*
-  - `SPIDERMON_SPIDER_OPEN_MONITORS = ()`
   - `SPIDERMON_SPIDER_CLOSE_MONITORS = ('broker_scout.monitors.monitors.SpiderCloseMonitorSuite',)`
   - `SPIDERMON_PERIODIC_MONITORS = {'broker_scout.monitors.monitors.PeriodicMonitorSuite': 60}`
-  - `SPIDERMON_VALIDATION_MONITORS = ('broker_scout.monitors.monitors.ValidationMonitorSuite',)`
-  - `SPIDERMON_SPIDER_CLOSE_ACTION_LIST = ('broker_scout.monitors.actions.LogOnlyAction',)` *(Phase 11 swaps this for `GoogleChatNotifier`).*
+  - `SPIDERMON_MAX_ERRORS = 500`
+  - `SPIDERMON_EXPECTED_FINISH_REASONS` mirrors `pipelines/postgres.py::SUCCESSFUL_REASONS`.
+- [x] **Deliberately not enabled**: `SPIDERMON_VALIDATION_MODELS` / `SPIDERMON_VALIDATION_MONITORS` — we already validate items via `ValidationPipeline` (Phase 2.3); Spidermon's pydantic-v1 path would duplicate work and may not align with our v2 schema. Validation-rate monitor in 9.1 reads our existing `validation/*` counters directly.
+- [x] 9.0 ships ONE built-in monitor per suite (`FinishReasonMonitor`, `ErrorCountMonitor`) — proves the wiring works end-to-end. Custom monitors land in 9.1+.
+- [x] `tests/test_monitors_smoke.py` — 10 smoke tests (264 total pass). Module-load assert in `coverage_tiers.py` enforces every dataclass field is tiered exactly once.
+- [x] Live-verified end-to-end: real spider run shows `[Spidermon] Finish Reason Monitor ... OK`, `LogOnlyAction ... OK`, JSON log emits `monitors passed` line. All four data sinks still flow.
+
+**Note for 9.3 (custom monitors)**: Spidermon 1.25 does NOT ship `RuntimeMonitor`, `ItemCountIncreaseMonitor`, `RetryRateMonitor`, or `ZeroItemsMonitor`. These must be implemented as customs in 9.3.
 
 ### 9.1 Validation suite (per-item)
 
