@@ -333,6 +333,8 @@ Whenever a setting is mirrored in two places (e.g. a default constant and a `set
 
 JSON lines via `python-json-logger`, configured in `utils/logging_setup.py`. Every line includes `ts`, `level`, `logger`, `message`, plus structured `extra` fields and (when in a spider context) `run_id`, `scrape_date`, `spider`.
 
+`LOG_FORMAT` env toggles terminal output: `json` (default, prod) or `pretty` (dev — single-line, ANSI-coloured, kv-suffixed). The pretty formatter is *terminal-only*; file output is always JSON regardless. Don't ship code that depends on a particular terminal format — pretty mode is for humans, JSON is the contract.
+
 ### 9.2 Logger names
 
 Use `logger = logging.getLogger(__name__)` at module top, no `logger = spider.logger` anywhere outside the spider class itself. Module-named loggers make filtering with `grep "broker_scout.pipelines"` reliable.
@@ -357,6 +359,14 @@ If you have to think about whether something is INFO or WARNING, it's INFO.
 ### 9.5 Spider object in `extra`
 
 Scrapy core passes the spider OBJECT in `extra={"spider": spider}` for some log lines. Our formatter coerces it to `spider.name` automatically (see `RunContextJsonFormatter.add_fields`). Don't try to fix this at call sites — it's handled centrally.
+
+### 9.6 Per-run log files
+
+Every spider run writes a JSON-formatted log file at `{LOG_FILE_DIR}/{spider}_{run_id}.log` (default `logs/`). `RunIdExtension.spider_opened` attaches the FileHandler once `run_id` exists; `spider_closed` detaches it AFTER the final "run finished" line.
+
+Retention is operator-tuneable via `LOG_RETENTION_DAYS` (default 30). The extension prunes `*.log` files older than the cutoff at the start of every run — non-`.log` files in the directory (operator notes, etc.) are left alone. Set `LOG_RETENTION_DAYS=0` to disable pruning; set `LOG_FILE_DIR=` to disable file logging entirely.
+
+Don't add a separate `RotatingFileHandler` — per-run files plus the prune-on-open pattern is the project's retention model (mirrors `out/*.csv` per RULES.md §14.5). One source of truth.
 
 ---
 

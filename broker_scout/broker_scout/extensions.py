@@ -13,6 +13,11 @@ from broker_scout.common.run_context import (
     clear_run_context,
     set_run_context,
 )
+from broker_scout.utils.logging_setup import (
+    attach_run_file_handler,
+    detach_run_file_handler,
+    prune_old_log_files,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +57,26 @@ class RunIdExtension:
         set_run_context(
             RunContext(run_id=run_id, scrape_date=scrape_date, spider_label=spider.name)
         )
+
+        # Per-run log file: prune first (so a stuck disk doesn't keep
+        # growing if the run later crashes), then attach. Settings are
+        # the single source for these knobs (RULES.md §7.1).
+        log_dir = self.crawler.settings.get("LOG_FILE_DIR", "logs") or ""
+        retention_days = self.crawler.settings.getint("LOG_RETENTION_DAYS", 30)
+        try:
+            prune_old_log_files(log_dir, retention_days)
+        except Exception:
+            # Prune is a best-effort cleanup; never let a bad file break
+            # a fresh run. Log loudly so ops can fix the directory.
+            logger.exception("prune_old_log_files failed", extra={"log_dir": log_dir})
+        try:
+            attach_run_file_handler(run_id, spider.name, log_dir=log_dir)
+        except Exception:
+            logger.exception(
+                "attach_run_file_handler failed; continuing with stderr only",
+                extra={"log_dir": log_dir, "run_id": run_id},
+            )
+
         logger.info("run started", extra={"run_id": run_id, "spider": spider.name})
 
     def spider_closed(self, spider, reason):
@@ -63,4 +88,7 @@ class RunIdExtension:
                 "spider": spider.name,
             },
         )
+        # Detach AFTER the final log line so 'run finished' lands in
+        # the file. Order matters here.
+        detach_run_file_handler()
         clear_run_context()

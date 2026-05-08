@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import time
 from io import StringIO
 
 import pytest
@@ -17,7 +19,10 @@ from broker_scout.common.run_context import (
 from broker_scout.utils.logging_setup import (
     PrettyConsoleFormatter,
     RunContextJsonFormatter,
+    attach_run_file_handler,
     configure_logging,
+    detach_run_file_handler,
+    prune_old_log_files,
 )
 
 
@@ -155,6 +160,98 @@ def test_configure_logging_unknown_format_falls_back_to_json():
     assert isinstance(
         logging.getLogger().handlers[0].formatter, RunContextJsonFormatter
     )
+
+
+# =============================================================== file handler
+
+
+@pytest.fixture(autouse=True)
+def _detach_between_tests():
+    """Make sure no run file handler leaks across tests."""
+    yield
+    detach_run_file_handler()
+
+
+def test_attach_creates_file_with_run_id_name(tmp_path):
+    log_dir = tmp_path / "logs"
+    path = attach_run_file_handler("abc-123", "agent_spider", log_dir=str(log_dir))
+    assert path is not None
+    assert path.name == "agent_spider_abc-123.log"
+    assert path.exists()
+    # Emitted line should land in the file as JSON.
+    logging.getLogger("test_attach").warning("hi", extra={"k": "v"})
+    detach_run_file_handler()
+    text = path.read_text(encoding="utf-8")
+    assert text.strip()
+    record = json.loads(text.strip().splitlines()[-1])
+    assert record["message"] == "hi"
+    assert record["k"] == "v"
+
+
+def test_attach_returns_none_when_log_dir_empty(tmp_path):
+    assert attach_run_file_handler("abc", "spider", log_dir="") is None
+
+
+def test_attach_swaps_existing_handler(tmp_path):
+    """Two consecutive attaches in the same process should leave only
+    one file handler attached and close the previous file."""
+    p1 = attach_run_file_handler("run1", "spider", log_dir=str(tmp_path))
+    p2 = attach_run_file_handler("run2", "spider", log_dir=str(tmp_path))
+    assert p1 != p2
+    file_handlers = [
+        h for h in logging.getLogger().handlers if isinstance(h, logging.FileHandler)
+    ]
+    assert len(file_handlers) == 1
+    assert file_handlers[0].baseFilename == str(p2)
+
+
+def test_detach_is_idempotent():
+    detach_run_file_handler()
+    detach_run_file_handler()  # must not raise
+
+
+def test_prune_deletes_only_old_files(tmp_path):
+    new = tmp_path / "fresh.log"
+    old = tmp_path / "stale.log"
+    new.write_text("x")
+    old.write_text("x")
+    forty_days_ago = time.time() - 40 * 86400
+    os.utime(old, (forty_days_ago, forty_days_ago))
+
+    deleted = prune_old_log_files(str(tmp_path), retention_days=30)
+
+    assert deleted == 1
+    assert new.exists()
+    assert not old.exists()
+
+
+def test_prune_skips_non_log_files(tmp_path):
+    """Notes / readmes that ops drop in logs/ shouldn't be touched."""
+    note = tmp_path / "NOTES.md"
+    note.write_text("don't delete me")
+    forty_days_ago = time.time() - 40 * 86400
+    os.utime(note, (forty_days_ago, forty_days_ago))
+
+    deleted = prune_old_log_files(str(tmp_path), retention_days=30)
+
+    assert deleted == 0
+    assert note.exists()
+
+
+def test_prune_zero_days_is_disabled(tmp_path):
+    f = tmp_path / "ancient.log"
+    f.write_text("x")
+    os.utime(f, (0, 0))  # 1970
+    assert prune_old_log_files(str(tmp_path), retention_days=0) == 0
+    assert f.exists()
+
+
+def test_prune_missing_directory_is_no_op(tmp_path):
+    assert prune_old_log_files(str(tmp_path / "nope"), retention_days=30) == 0
+
+
+def test_prune_empty_log_dir_is_no_op():
+    assert prune_old_log_files("", retention_days=30) == 0
 
 
 def test_object_without_name_is_not_coerced(captured_logger):

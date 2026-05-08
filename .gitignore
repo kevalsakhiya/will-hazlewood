@@ -23,6 +23,7 @@ htmlcov/
 secrets/
 dld_snapshots/
 out/
+logs/
 
 # Virtual Environments
 venv/

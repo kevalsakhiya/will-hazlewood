@@ -1,26 +1,41 @@
-"""Structured logging with a dev-friendly pretty mode.
+"""Structured logging with a dev-friendly pretty mode and per-run files.
 
-`LOG_FORMAT=json` (default) → one JSON object per line, machine-grep
-friendly. Used in production / log aggregators / CI.
+Two output sinks share the same root logger:
 
-`LOG_FORMAT=pretty` → one human-readable line per record with ANSI
-colour-coded levels and trailing `key=value` pairs for any structured
-fields. Used in dev when you're tailing the terminal.
+  * Stream (stderr) — terminal output. Honours `LOG_FORMAT=json|pretty`.
+  * File (optional) — `logs/{spider}_{run_id}.log`. Always JSON. Attached
+    by `RunIdExtension.spider_opened` once the run_id exists; detached
+    on `spider_closed`. Mirrors the per-run archive pattern of
+    `out/*.csv` (RULES.md §14.5).
 
-Both modes go through `RunContextJsonFormatter` for the JSON path and
-`PrettyConsoleFormatter` for the pretty path. They share the same
-contextvar-based run_id / scrape_date / spider injection, so switching
-formats never changes which fields are surfaced.
+Old log files are pruned automatically at the start of each run via
+`prune_old_log_files(...)`; retention defaults to 30 days. Set
+`LOG_RETENTION_DAYS=0` to disable, or `LOG_FILE_DIR=` to disable file
+logging entirely.
+
+Both formatters share the contextvar-based run_id / scrape_date /
+spider injection, so switching formats never changes which fields
+appear — only how they're rendered.
 """
 
 from __future__ import annotations
 
 import logging
 import sys
+import time
+from pathlib import Path
 
 from pythonjsonlogger import jsonlogger
 
 from broker_scout.common.run_context import get_run_context
+
+logger = logging.getLogger(__name__)
+
+# Module-level handle on the active per-run FileHandler. We need a ref
+# so detach can find and close the same handler we attached. One run
+# per process in deployment, so module-level is fine; tests reset via
+# detach() in autouse fixtures.
+_run_file_handler: logging.FileHandler | None = None
 
 # Fields the pretty formatter promotes to the prefix or hides from the
 # trailing kv blob. `message` is rendered as the main text; `level`
@@ -164,7 +179,12 @@ def _build_handler(log_format: str) -> logging.Handler:
 def configure_logging(level: str = "INFO", log_format: str = "json") -> None:
     """Replace the root logger handlers with a single formatted stream
     handler. Idempotent — re-running swaps the active handler in place
-    so test setups can reconfigure without leaking handlers."""
+    so test setups can reconfigure without leaking handlers.
+
+    File output is NOT attached here — `run_id` doesn't exist yet at
+    settings.py-import time. `RunIdExtension.spider_opened` calls
+    `attach_run_file_handler(...)` once it's available.
+    """
 
     fmt = (log_format or "json").lower()
     if fmt not in {"json", "pretty"}:
@@ -177,3 +197,105 @@ def configure_logging(level: str = "INFO", log_format: str = "json") -> None:
         root.removeHandler(handler)
 
     root.addHandler(_build_handler(fmt))
+
+
+# ---------------------------------------------------------- per-run file handler
+
+
+def attach_run_file_handler(
+    run_id: str, spider_name: str, log_dir: str = "logs"
+) -> Path | None:
+    """Attach a JSON FileHandler at `{log_dir}/{spider_name}_{run_id}.log`.
+
+    Returns the path written to, or `None` if file logging is disabled
+    (empty `log_dir`). If a previous run handler is still attached
+    (rare — multiple spiders in one process) it's detached first so the
+    older file gets a clean close.
+
+    File output is always JSON regardless of the terminal `LOG_FORMAT`,
+    so files stay grep- / aggregator-friendly even when the operator
+    is tailing pretty output.
+    """
+    global _run_file_handler
+
+    if not log_dir:
+        return None
+
+    if _run_file_handler is not None:
+        # Stale ref from an earlier run in the same process — close
+        # cleanly before swapping.
+        detach_run_file_handler()
+
+    log_path = Path(log_dir) / f"{spider_name}_{run_id}.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    handler = logging.FileHandler(log_path, encoding="utf-8")
+    handler.setFormatter(
+        RunContextJsonFormatter(
+            "%(asctime)s %(message)s",
+            rename_fields={"asctime": "ts"},
+        )
+    )
+    logging.getLogger().addHandler(handler)
+    _run_file_handler = handler
+    logger.info(
+        "run log file attached", extra={"path": str(log_path), "run_id": run_id}
+    )
+    return log_path
+
+
+def detach_run_file_handler() -> None:
+    """Remove the active per-run FileHandler from the root logger and
+    close it. Safe to call when nothing is attached. Called from
+    `RunIdExtension.spider_closed` AFTER its final log line so the
+    'run finished' record still lands in the file."""
+    global _run_file_handler
+    if _run_file_handler is None:
+        return
+    handler = _run_file_handler
+    _run_file_handler = None
+    logging.getLogger().removeHandler(handler)
+    handler.close()
+
+
+# ------------------------------------------------------------------- pruning
+
+
+def prune_old_log_files(log_dir: str, retention_days: int) -> int:
+    """Delete `*.log` files in `log_dir` whose mtime is older than
+    `retention_days`. Returns the count deleted.
+
+    No-op when `log_dir` is empty, the directory doesn't exist, or
+    `retention_days <= 0` (operator opt-out). Per-file errors are
+    logged at WARNING and don't abort the prune — a single permission
+    issue shouldn't keep the rest of the directory full forever.
+    """
+    if not log_dir or retention_days <= 0:
+        return 0
+    path = Path(log_dir)
+    if not path.is_dir():
+        return 0
+
+    cutoff = time.time() - retention_days * 86400
+    deleted = 0
+    for entry in path.glob("*.log"):
+        try:
+            if entry.stat().st_mtime >= cutoff:
+                continue
+            entry.unlink()
+            deleted += 1
+        except FileNotFoundError:
+            # Concurrent delete (another process) — fine, treat as done.
+            continue
+        except OSError as exc:
+            logger.warning(
+                "prune_old_log_files: failed to delete file",
+                extra={"path": str(entry), "error": str(exc)},
+            )
+
+    if deleted:
+        logger.info(
+            "pruned old log files",
+            extra={"log_dir": log_dir, "deleted": deleted, "retention_days": retention_days},
+        )
+    return deleted

@@ -23,6 +23,14 @@ LOG_ENABLED = False  # we install our own handler in configure_logging()
 # crawler before our handler ever runs).
 configure_logging(LOG_LEVEL, os.getenv("LOG_FORMAT", "json"))
 
+# Per-run file logging — `RunIdExtension.spider_opened` attaches a
+# JSON FileHandler at `{LOG_FILE_DIR}/{spider}_{run_id}.log` once the
+# run_id exists. Set LOG_FILE_DIR empty to disable.
+LOG_FILE_DIR = os.getenv("LOG_FILE_DIR", "logs")
+# Retention for old run log files. RunIdExtension prunes before
+# attaching the new file. Set to 0 to disable pruning.
+LOG_RETENTION_DAYS = int(os.getenv("LOG_RETENTION_DAYS", "30"))
+
 EXTENSIONS = {
     "broker_scout.extensions.RunIdExtension": 100,
     "spidermon.contrib.scrapy.extensions.Spidermon": 500,
