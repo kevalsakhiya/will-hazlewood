@@ -137,6 +137,62 @@ def test_summary_critical_failure_sends_red(patch_log_alert):
     assert "[critical]" in call["body"]
 
 
+def test_summary_works_with_real_spidermon_failure_shape(patch_log_alert):
+    """Regression: Spidermon failures expose `reason`/`error`, NOT
+    `error_message` (which only existed in our test mocks). A
+    previous version called `'.splitlines()[0]'` on the missing
+    `error_message` attribute and crashed with IndexError, so the
+    Discord card never sent during failed runs."""
+    notifier = RecordingNotifier()
+    crawler = _crawler(
+        {"run_id": "abc", "item_scraped_count": 17,
+         "validation/passed_total": 17, "validation/failed_total": 0,
+         "match/not_found": 17}
+    )
+    # Real Spidermon failure shape: reason + error, NO error_message.
+    real_failure = SimpleNamespace(
+        monitor=SimpleNamespace(
+            name="MatchStatusDistributionMonitor/test_high_confidence_match_rate",
+            severity="critical",
+        ),
+        reason="high-confidence match rate 0.00% (exact_brn=0 + name_unique=0 / 17) below threshold 60.00%",
+        error="Traceback ...\nAssertionError: high-confidence match rate 0.00% ...",
+    )
+    action = SendChatSummaryAction(crawler=crawler, notifier=notifier)
+    action.result = SimpleNamespace(
+        monitors_passed_results=[],
+        monitors_failed_results=[real_failure],
+    )
+    action.run_action()
+    assert len(notifier.calls) == 1
+    call = notifier.calls[0]
+    assert call["level"] == "critical"
+    assert "MatchStatusDistributionMonitor" in call["body"]
+    assert "high-confidence match rate 0.00%" in call["body"]
+
+
+def test_summary_handles_empty_reason_gracefully(patch_log_alert):
+    """Regression: an empty error_message used to crash with
+    IndexError on `''.splitlines()[0]`."""
+    notifier = RecordingNotifier()
+    crawler = _crawler(
+        {"run_id": "abc", "item_scraped_count": 1,
+         "validation/passed_total": 1, "validation/failed_total": 0}
+    )
+    empty_failure = SimpleNamespace(
+        monitor=SimpleNamespace(name="X", severity="critical"),
+        reason="",  # falsy
+        error="",
+    )
+    action = SendChatSummaryAction(crawler=crawler, notifier=notifier)
+    action.result = SimpleNamespace(
+        monitors_passed_results=[],
+        monitors_failed_results=[empty_failure],
+    )
+    action.run_action()  # must NOT raise
+    assert "(no detail)" in notifier.calls[0]["body"]
+
+
 def test_summary_warning_only_sends_yellow(patch_log_alert):
     notifier = RecordingNotifier()
     crawler = _crawler(

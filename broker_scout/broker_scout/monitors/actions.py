@@ -178,7 +178,17 @@ def _drive_link(file_id: str | None) -> str:
 def _summarize_failures(failed_results, alert_min_level: str) -> tuple[str, list[str]]:
     """Return (highest severity present, list of formatted failure lines).
 
-    Filters failures whose monitor severity is below the floor."""
+    Filters failures whose monitor severity is below the floor.
+
+    Spidermon's MonitorResult exposes:
+      * `failure.monitor` — the Monitor instance (has `.name`,
+        `.severity` if it's one of ours).
+      * `failure.reason` — the assertion message (e.g. '1 != 2').
+      * `failure.error` — full traceback string (fallback when reason
+        is empty, e.g. for ERROR-status uncaught exceptions).
+      * `error_message` — legacy / our unit-test mock attribute name;
+        kept in the chain for backwards compat with the test fixtures.
+    """
     severities: list[str] = []
     lines: list[str] = []
     for failure in failed_results:
@@ -187,9 +197,17 @@ def _summarize_failures(failed_results, alert_min_level: str) -> tuple[str, list
         if not _is_level_at_or_above(sev, alert_min_level):
             continue
         severities.append(sev)
-        name = getattr(monitor, "name", repr(monitor))
-        reason = str(getattr(failure, "error_message", "") or "").splitlines()[0]
-        lines.append(f"  • [{sev}] {name}: {reason[:160]}")
+        name = getattr(monitor, "name", None) or repr(monitor)
+        # Prefer `reason` (clean message), fall back to `error`
+        # (full traceback), then `error_message` (test mock shape).
+        raw = (
+            getattr(failure, "reason", None)
+            or getattr(failure, "error", None)
+            or getattr(failure, "error_message", None)
+            or ""
+        )
+        first_line = next(iter(str(raw).splitlines()), "") or "(no detail)"
+        lines.append(f"  • [{sev}] {name}: {first_line[:160]}")
     highest = "critical" if "critical" in severities else (
         "warning" if "warning" in severities else "ok"
     )
