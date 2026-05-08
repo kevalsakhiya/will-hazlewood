@@ -40,6 +40,13 @@ CARD_COLOURS = {
     "ok":       "#1E8E3E",  # green
 }
 
+# Discord wants colours as decimal RGB ints, not hex strings.
+DISCORD_COLOURS = {
+    "critical": 0xD93025,
+    "warning":  0xF9AB00,
+    "ok":       0x1E8E3E,
+}
+
 
 class Notifier(Protocol):
     """Phase 11 alert delivery interface — implementers POST to a real
@@ -145,10 +152,33 @@ class LogOnlyNotifier:
     wait=wait_exponential(multiplier=2, max=30),
     retry=retry_if_exception(_is_transient_http_error),
 )
-def _post_chat_card(url: str, payload: dict) -> None:
+def _post_webhook_json(url: str, payload: dict) -> None:
+    """Generic HTTP POST + raise_for_status, with tenacity retry on
+    5xx/transport errors. Used by both `GoogleChatNotifier` and
+    `DiscordNotifier` — webhook semantics are the same; only the
+    payload shape differs."""
     with httpx.Client(timeout=15.0) as client:
         response = client.post(url, json=payload)
         response.raise_for_status()
+
+
+# Backwards-compat alias for any caller still importing the old name.
+_post_chat_card = _post_webhook_json
+
+
+def _build_discord_embed(level: str, title: str, body: str, run_id: str | None) -> dict:
+    """Discord embed payload. Colour is a decimal RGB int (not hex).
+    Discord renders newlines and basic Markdown natively in the
+    description field; no `<br>` substitution needed."""
+    safe_body = _truncate(body, limit=3900)  # Discord caps description at 4096
+    embed = {
+        "title": title[:256],
+        "description": safe_body,
+        "color": DISCORD_COLOURS.get(level, DISCORD_COLOURS["critical"]),
+    }
+    if run_id:
+        embed["footer"] = {"text": f"run_id: {run_id}"}
+    return {"embeds": [embed]}
 
 
 class GoogleChatNotifier:
@@ -168,39 +198,95 @@ class GoogleChatNotifier:
             )
             return False
         payload = _build_card(level, title, body, run_id)
-        try:
-            _post_chat_card(self._webhook_url, payload)
-        except httpx.HTTPStatusError as exc:
-            logger.error(
-                "Chat webhook rejected payload",
-                extra={
-                    "status": exc.response.status_code,
-                    "alert_title": title,
-                    "body_preview": exc.response.text[:200],
-                },
-            )
-            return False
-        except (httpx.TransportError, Exception) as exc:
-            logger.error(
-                "Chat webhook send failed",
-                extra={"error": repr(exc), "alert_title": title},
-            )
-            return False
-        logger.info(
-            "Chat alert sent", extra={"alert_level": level, "alert_title": title}
+        return _send_via_webhook(
+            self._webhook_url, payload, level, title, channel="chat"
         )
-        return True
+
+
+class DiscordNotifier:
+    """POSTs a Discord embed payload to an incoming webhook URL.
+
+    Reads `DISCORD_WEBHOOK_URL` at first use. Same retry policy as
+    `GoogleChatNotifier`: tenacity retries 5xx + transport errors,
+    bails on 4xx. Returns False without raising when the URL is
+    unset (dev-friendly).
+    """
+
+    def __init__(self, webhook_url: str | None = None):
+        if webhook_url is None:
+            load_dotenv()
+            webhook_url = os.getenv("DISCORD_WEBHOOK_URL", "") or None
+        self._webhook_url = webhook_url
+
+    def send(self, level: str, title: str, body: str, run_id: str | None) -> bool:
+        if not self._webhook_url:
+            logger.warning(
+                "DISCORD_WEBHOOK_URL unset — skipping Discord send",
+                extra={"alert_level": level, "alert_title": title},
+            )
+            return False
+        payload = _build_discord_embed(level, title, body, run_id)
+        return _send_via_webhook(
+            self._webhook_url, payload, level, title, channel="discord"
+        )
+
+
+def _send_via_webhook(
+    url: str, payload: dict, level: str, title: str, channel: str
+) -> bool:
+    """Shared send-with-graceful-error path for chat/discord notifiers."""
+    try:
+        _post_webhook_json(url, payload)
+    except httpx.HTTPStatusError as exc:
+        logger.error(
+            f"{channel} webhook rejected payload",
+            extra={
+                "status": exc.response.status_code,
+                "alert_title": title,
+                "body_preview": exc.response.text[:200],
+            },
+        )
+        return False
+    except (httpx.TransportError, Exception) as exc:
+        logger.error(
+            f"{channel} webhook send failed",
+            extra={"error": repr(exc), "alert_title": title},
+        )
+        return False
+    logger.info(
+        f"{channel} alert sent",
+        extra={"alert_level": level, "alert_title": title},
+    )
+    return True
 
 
 # ---------------------------------------------------------------- factory
 
 
 def get_notifier() -> Notifier:
-    """Pick a notifier based on env config. Today only Google Chat is
-    implemented; ALERT_BACKEND is read but not branched on (placeholder
-    for future Slack/WhatsApp). Falls back to LogOnly when the webhook
-    URL isn't configured."""
+    """Pick a notifier based on env config.
+
+    Selection order:
+      1. ALERT_BACKEND env var (`discord`, `google_chat`) — explicit wins.
+      2. Auto-detect: prefer Discord (works on personal accounts) over
+         Chat (requires Workspace).
+      3. Fall back to LogOnly.
+
+    Falls through to LogOnly even when the chosen backend's URL is
+    blank — defensive so a typo'd ALERT_BACKEND doesn't silently
+    drop alerts.
+    """
     load_dotenv()
+    backend = (os.getenv("ALERT_BACKEND") or "").lower().strip()
+
+    if backend == "discord":
+        return DiscordNotifier() if os.getenv("DISCORD_WEBHOOK_URL") else LogOnlyNotifier()
+    if backend == "google_chat":
+        return GoogleChatNotifier() if os.getenv("GOOGLE_CHAT_WEBHOOK_URL") else LogOnlyNotifier()
+
+    # Auto-detect: Discord first (personal-account-friendly).
+    if os.getenv("DISCORD_WEBHOOK_URL"):
+        return DiscordNotifier()
     if os.getenv("GOOGLE_CHAT_WEBHOOK_URL"):
         return GoogleChatNotifier()
     return LogOnlyNotifier()

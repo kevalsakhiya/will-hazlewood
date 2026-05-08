@@ -1,6 +1,6 @@
 # will-hazlewood — broker intelligence pipeline
 
-Dubai broker intelligence: pull DLD's licensed-broker list, search each broker on PropertyFinder and Bayut, persist enriched records to Postgres + Google Sheets + Google Drive, monitor with Spidermon, alert via Google Chat.
+Dubai broker intelligence: pull DLD's licensed-broker list, search each broker on PropertyFinder and Bayut, persist enriched records to Postgres + Google Sheets + Google Drive, monitor with Spidermon, alert via Discord or Google Chat (configurable).
 
 Architecture: see [`plan.md`](plan.md).
 Phased build plan: see [`roadmap.md`](roadmap.md).
