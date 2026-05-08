@@ -14,7 +14,11 @@ from broker_scout.common.run_context import (
     clear_run_context,
     set_run_context,
 )
-from broker_scout.utils.logging_setup import RunContextJsonFormatter
+from broker_scout.utils.logging_setup import (
+    PrettyConsoleFormatter,
+    RunContextJsonFormatter,
+    configure_logging,
+)
 
 
 @pytest.fixture
@@ -85,6 +89,72 @@ def test_explicit_extra_takes_precedence_over_context(captured_logger):
     logger.info("hi", extra={"run_id": "override-run"})
     record = _last_line_json(buf)
     assert record["run_id"] == "override-run"
+
+
+@pytest.fixture
+def pretty_logger():
+    """A logger using the human-readable formatter (colour off so the
+    captured string is comparable)."""
+    buf = StringIO()
+    handler = logging.StreamHandler(buf)
+    handler.setFormatter(PrettyConsoleFormatter(colour=False))
+    logger = logging.getLogger("test_pretty_logging")
+    logger.handlers = [handler]
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    yield logger, buf
+    clear_run_context()
+
+
+def test_pretty_renders_single_line_with_kv(pretty_logger):
+    logger, buf = pretty_logger
+    logger.info("flushed batch", extra={"rows": 500, "sheet_id": "abc"})
+    line = buf.getvalue().strip()
+    assert "\n" not in line
+    assert "INFO" in line
+    assert "test_pretty_logging" in line
+    assert "flushed batch" in line
+    assert "rows=500" in line
+    assert "sheet_id=abc" in line
+
+
+def test_pretty_includes_run_context(pretty_logger):
+    logger, buf = pretty_logger
+    set_run_context(
+        RunContext(run_id="abc-123", scrape_date="2026-05-08", spider_label="agent_spider")
+    )
+    logger.info("hi")
+    line = buf.getvalue().strip()
+    assert "run_id=abc-123" in line
+    assert "spider=agent_spider" in line
+
+
+def test_pretty_coerces_spider_object_to_name(pretty_logger):
+    logger, buf = pretty_logger
+    logger.info("hi", extra={"spider": FakeSpider()})
+    line = buf.getvalue().strip()
+    assert "spider=agent_spider" in line
+    assert "<AgentSpider" not in line
+
+
+def test_configure_logging_pretty_swaps_formatter():
+    """Calling configure_logging twice swaps the active handler/format
+    in place rather than stacking handlers."""
+    configure_logging("INFO", "pretty")
+    root = logging.getLogger()
+    assert len(root.handlers) == 1
+    assert isinstance(root.handlers[0].formatter, PrettyConsoleFormatter)
+
+    configure_logging("INFO", "json")
+    assert len(root.handlers) == 1
+    assert isinstance(root.handlers[0].formatter, RunContextJsonFormatter)
+
+
+def test_configure_logging_unknown_format_falls_back_to_json():
+    configure_logging("INFO", "banana")
+    assert isinstance(
+        logging.getLogger().handlers[0].formatter, RunContextJsonFormatter
+    )
 
 
 def test_object_without_name_is_not_coerced(captured_logger):

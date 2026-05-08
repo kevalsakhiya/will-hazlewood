@@ -14,8 +14,11 @@ SPIDER_MODULES = ["broker_scout.spiders"]
 NEWSPIDER_MODULE = "broker_scout.spiders"
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
-LOG_ENABLED = False  # we install our own JSON handler in configure_logging()
-configure_logging(LOG_LEVEL)
+# `json` (default) for prod / file output / aggregators; `pretty` for
+# dev terminal tailing — single-line, ANSI-coloured, kv-suffixed.
+LOG_FORMAT = os.getenv("LOG_FORMAT", "json")
+LOG_ENABLED = False  # we install our own handler in configure_logging()
+configure_logging(LOG_LEVEL, LOG_FORMAT)
 
 EXTENSIONS = {
     "broker_scout.extensions.RunIdExtension": 100,
