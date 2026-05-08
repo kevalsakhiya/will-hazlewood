@@ -277,10 +277,23 @@ class AgentSpider(BaseBrokerSpider):
         dld_broker: DLDBroker,
         match_result: MatchResult,
     ):
-        next_data = json.loads(
-            response.xpath('.//script[@id="__NEXT_DATA__"]/text()').get()
-        )
+        # Guard the __NEXT_DATA__ extraction so a missing or malformed
+        # script tag doesn't crash the spider — produce stats instead
+        # and let the rest of parse_agent fall through with an empty
+        # agent_data (downstream extractors handle empty input cleanly).
+        raw = response.xpath('.//script[@id="__NEXT_DATA__"]/text()').get()
+        if not raw:
+            self.crawler.stats.inc_value("extract/next_data/missing")
+            next_data: dict = {}
+        else:
+            try:
+                next_data = json.loads(raw)
+            except json.JSONDecodeError:
+                self.crawler.stats.inc_value("extract/next_data/bad_json")
+                next_data = {}
         agent_data = jmespath.search("props.pageProps.agent", next_data) or {}
+        if not agent_data:
+            self.crawler.stats.inc_value("extract/agent_data/missing")
 
         item = PropertyFinderBrokerItem(
             agent_url=response.url,
@@ -474,9 +487,10 @@ class AgentSpider(BaseBrokerSpider):
         agency_registration_number = response.xpath(
             './/div[@data-testid="license-content"]/text()'
         ).get()
-        item.agency_registration_number = (
-            agency_registration_number.strip() if agency_registration_number else None
-        )
+        cleaned = agency_registration_number.strip() if agency_registration_number else None
+        if not cleaned:
+            self.crawler.stats.inc_value("extract/agency_license/missing")
+        item.agency_registration_number = cleaned
 
         if total_page_count > 0:
             yield Request(
@@ -506,6 +520,7 @@ class AgentSpider(BaseBrokerSpider):
         try:
             payload = json.loads(response.text)
         except json.JSONDecodeError:
+            self.crawler.stats.inc_value("extract/listings_api/non_json")
             self.logger.warning(
                 "listings API returned non-JSON for agent_id=%s page=%s; yielding partial",
                 agent_id,
@@ -514,7 +529,13 @@ class AgentSpider(BaseBrokerSpider):
             yield self._finalize(item, agg)
             return
 
-        for listing in jmespath.search("listings", payload) or []:
+        listings = jmespath.search("listings", payload) or []
+        # Page 1 with zero listings, when we expected some, signals
+        # extraction trouble (deleted listings, API change, etc.).
+        # Don't count later pages — last page often has fewer than 50.
+        if not listings and current_page == 1 and total_page_count > 0:
+            self.crawler.stats.inc_value("extract/listings_api/empty")
+        for listing in listings:
             self._aggregate_listing(listing, agg)
 
         if total_page_count > current_page:

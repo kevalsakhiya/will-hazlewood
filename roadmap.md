@@ -345,16 +345,35 @@ What's missing (to be added in this phase):
 
 ---
 
-## Phase 7 — Extraction-health stats counters *(do alongside earlier phases)*
+## Phase 7 — Extraction-health stats counters
 
 These are one-line `self.crawler.stats.inc_value(...)` calls. Cost nothing, accumulate signal for the monitor work in Phase 9.
 
-- [ ] `extract/next_data/missing` — `__NEXT_DATA__` script tag absent on agent page
-- [ ] `extract/agent_data/missing` — `props.pageProps.agent` is null
-- [ ] `extract/brn/fallback_used` — HTML fallback fired (already wired)
-- [ ] `extract/agency_license/missing` — license XPath returned nothing
-- [ ] `extract/listings_api/non_json` — JSON decode failed (already wired)
-- [ ] `extract/listings_api/empty` — listings array empty when `total_page_count > 0`
+**Profile-page extraction** (`parse_agent`, `_extract_profile_brn`):
+
+- [x] `extract/next_data/missing` — `<script id="__NEXT_DATA__">` tag absent on agent page (graceful fallback to empty `agent_data`).
+- [x] `extract/next_data/bad_json` — script tag present but JSON decode failed *(added during 7 — wasn't in the original spec but worth distinguishing from "missing").*
+- [x] `extract/agent_data/missing` — `props.pageProps.agent` resolves to null/empty.
+- [x] `extract/brn/fallback_used` — `compliances[-1].value` missing in JSON; HTML "Dubai Broker License" cell consulted instead. *(Wired during Phase 6.4 BRN refactor.)*
+
+**Search-page extraction** (`_extract_candidates`):
+
+- [x] `extract/search_json/fallback_used` — `props.pageProps.agents.data` missing/malformed; HTML XPath candidate extraction used as backup. *(New counter — wasn't in original Phase 7 spec; added during BRN-first match work since the search page now carries the authoritative BRN signal.)*
+
+**Agency-page extraction** (`parse_agency`):
+
+- [x] `extract/agency_license/missing` — `data-testid="license-content"` XPath returned nothing.
+
+**Listings-API pagination** (`parse_property`):
+
+- [x] `extract/listings_api/non_json` — `json.loads(response.text)` raised; partial item finalized.
+- [x] `extract/listings_api/empty` — listings array empty on page 1 when `total_page_count > 0` (data we expected isn't there). Later-page emptiness is normal (last page usually short of 50) and not counted.
+
+**Match outcomes** *(wired in Phase 6 — listed here so Phase 9 monitors know they exist):*
+
+- [x] `match/{exact_brn,name_unique,name_fuzzy,ambiguous,not_found}` — one increment per DLD broker.
+- [x] `match/promoted_to_exact_brn` — name match upgraded to BRN match after profile fetch (rare path; only fires when search-page JSON didn't carry BRN).
+- [x] `match/ambiguous_disambiguated` / `match/ambiguous_exhausted` — BRN-walk path outcomes (rare; primary BRN match runs at search step).
 
 ---
 
