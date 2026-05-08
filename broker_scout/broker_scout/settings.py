@@ -14,11 +14,14 @@ SPIDER_MODULES = ["broker_scout.spiders"]
 NEWSPIDER_MODULE = "broker_scout.spiders"
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+LOG_ENABLED = False  # we install our own handler in configure_logging()
 # `json` (default) for prod / file output / aggregators; `pretty` for
 # dev terminal tailing — single-line, ANSI-coloured, kv-suffixed.
-LOG_FORMAT = os.getenv("LOG_FORMAT", "json")
-LOG_ENABLED = False  # we install our own handler in configure_logging()
-configure_logging(LOG_LEVEL, LOG_FORMAT)
+# Read via a local name (NOT a module-level `LOG_FORMAT`) so we don't
+# shadow Scrapy's built-in LOG_FORMAT setting (a %-style format string
+# Scrapy validates at startup; assigning "json" there crashes the
+# crawler before our handler ever runs).
+configure_logging(LOG_LEVEL, os.getenv("LOG_FORMAT", "json"))
 
 EXTENSIONS = {
     "broker_scout.extensions.RunIdExtension": 100,
