@@ -90,6 +90,12 @@ FIELD_COVERAGE_CRITICAL_THRESHOLD = 0.95  # broker_name, agent_url, brn
 FIELD_COVERAGE_HIGH_THRESHOLD = 0.80
 FIELD_COVERAGE_MEDIUM_THRESHOLD = 0.50
 
+# Phase 11 — Google Chat alert system.
+# Severity floor: "warning" sends warning + critical; "critical" sends
+# critical only. Read by SendChatSummaryAction to filter monitor
+# failures shown on the card.
+ALERT_MIN_LEVEL = os.getenv("ALERT_MIN_LEVEL", "warning")
+
 # Filled phase by phase per roadmap.md priority table:
 #   100 normalization · 200 validation · 300 dedupe ·
 #   400 postgres     · 500 gsheets    · 600 gdrive_csv

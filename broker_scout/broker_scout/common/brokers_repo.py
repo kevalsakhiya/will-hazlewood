@@ -17,6 +17,7 @@ from psycopg.types.json import Jsonb
 from broker_scout.common.db import get_pool
 
 MATCHED_STATUSES: tuple[str, ...] = ("exact_brn", "name_unique", "name_fuzzy")
+ALERT_LEVELS: tuple[str, ...] = ("warning", "critical")
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +147,49 @@ def close_run(
             "items_dropped": items_dropped,
         },
     )
+
+
+_RECENT_ALERT_SQL = """
+SELECT 1
+  FROM alert_log
+ WHERE level = %(level)s
+   AND title = %(title)s
+   AND sent_at > now() - make_interval(mins => %(window)s)
+ LIMIT 1
+"""
+
+_INSERT_ALERT_SQL = """
+INSERT INTO alert_log (run_id, level, title, body)
+VALUES (%(run_id)s, %(level)s, %(title)s, %(body)s)
+"""
+
+
+def recent_alert_exists(
+    level: str, title: str, window_minutes: int = 30
+) -> bool:
+    """Phase 11 anti-spam: did we send a (level, title)-identical alert
+    in the last `window_minutes` minutes? Dedupe key is GLOBAL (across
+    runs), per the spec — re-running a broken pipeline shouldn't spam
+    every run."""
+    pool = get_pool()
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            _RECENT_ALERT_SQL,
+            {"level": level, "title": title, "window": int(window_minutes)},
+        )
+        return cur.fetchone() is not None
+
+
+def log_alert(run_id: str | None, level: str, title: str, body: str) -> None:
+    """Record a sent alert in `alert_log`. `run_id` may be NULL for
+    pre-spider-open issues; the column allows NULLs."""
+    pool = get_pool()
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            _INSERT_ALERT_SQL,
+            {"run_id": run_id, "level": level, "title": title, "body": body},
+        )
+        conn.commit()
 
 
 def matched_field_coverage(

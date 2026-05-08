@@ -50,6 +50,45 @@ def test_open_run_inserts_with_run_id_and_spider(mock_pool):
 # ------------------------------------------------------------- close_run
 
 
+def test_recent_alert_exists_returns_true_when_row_present(mock_pool):
+    cur, _ = mock_pool
+    cur.fetchone.return_value = (1,)
+    assert brokers_repo.recent_alert_exists("critical", "Boom", 30) is True
+    sql, params = cur.execute.call_args.args
+    assert "alert_log" in sql
+    assert "make_interval" in sql
+    assert params == {"level": "critical", "title": "Boom", "window": 30}
+
+
+def test_recent_alert_exists_returns_false_when_no_row(mock_pool):
+    cur, _ = mock_pool
+    cur.fetchone.return_value = None
+    assert brokers_repo.recent_alert_exists("critical", "Boom", 30) is False
+
+
+def test_log_alert_inserts_row(mock_pool):
+    cur, conn = mock_pool
+    brokers_repo.log_alert("run-x", "critical", "title", "body text")
+    cur.execute.assert_called_once()
+    sql, params = cur.execute.call_args.args
+    assert "INSERT INTO alert_log" in sql
+    assert params == {
+        "run_id": "run-x",
+        "level": "critical",
+        "title": "title",
+        "body": "body text",
+    }
+    conn.commit.assert_called_once()
+
+
+def test_log_alert_accepts_null_run_id(mock_pool):
+    """Pre-spider-open issues may not have a run_id yet."""
+    cur, _ = mock_pool
+    brokers_repo.log_alert(None, "critical", "boot fail", "body")
+    sql, params = cur.execute.call_args.args
+    assert params["run_id"] is None
+
+
 def test_matched_field_coverage_zero_rows(mock_pool):
     cur, _ = mock_pool
     cur.fetchone.return_value = (0,) + (0,) * 3  # n=0 + per-field zeros

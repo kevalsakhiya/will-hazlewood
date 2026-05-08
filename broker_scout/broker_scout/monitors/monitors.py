@@ -26,7 +26,12 @@ from spidermon.contrib.scrapy.monitors.base import BaseScrapyMonitor
 
 from broker_scout.common import brokers_repo
 from broker_scout.monitors import coverage_tiers
-from broker_scout.monitors.actions import CloseSpiderAction, LogOnlyAction
+from broker_scout.monitors.actions import (
+    CloseSpiderAction,
+    LogOnlyAction,
+    SendChatSummaryAction,
+    SendCriticalChatAlertAction,
+)
 
 # ---------------------------------------------------------------- defaults
 
@@ -66,9 +71,15 @@ class _BrokerScoutMonitor(BaseScrapyMonitor):
     stdlib `TestLoader` which ignores the attribute, so suite
     execution at runtime is unaffected — only test collection in our
     own pytest runs is.
+
+    `severity` is read by Phase 11 actions (SendChatSummaryAction)
+    to colour-code alerts: critical → red, warning → yellow.
+    Default 'critical' — safer to over-alert and demote individual
+    monitors as we calibrate.
     """
 
     __test__ = False
+    severity: str = "critical"
 
 
 class ValidationFailureRateMonitor(_BrokerScoutMonitor):
@@ -536,7 +547,9 @@ class SpiderCloseMonitorSuite(MonitorSuite):
         # Phase 9.3.2 field coverage (matched rows only)
         MatchedRowFieldCoverageMonitor,
     ]
-    monitors_finished_actions = [LogOnlyAction]
+    # LogOnlyAction stays — useful when the webhook is misconfigured.
+    # SendChatSummaryAction adds the operator-facing alert (Phase 11).
+    monitors_finished_actions = [LogOnlyAction, SendChatSummaryAction]
 
 
 class PeriodicMonitorSuite(MonitorSuite):
@@ -552,4 +565,11 @@ class PeriodicMonitorSuite(MonitorSuite):
         ErrorCountMonitor,
         PeriodicRateLimitMonitor,
     ]
-    monitors_failed_actions = [LogOnlyAction, CloseSpiderAction]
+    # SendCriticalChatAlertAction fires the mid-run alert (Phase 11);
+    # CloseSpiderAction closes the spider; LogOnlyAction logs the
+    # failure regardless of webhook state.
+    monitors_failed_actions = [
+        LogOnlyAction,
+        SendCriticalChatAlertAction,
+        CloseSpiderAction,
+    ]

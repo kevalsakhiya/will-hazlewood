@@ -554,40 +554,42 @@ Read from `scrape_runs.stats` JSONB. Run as part of close suite.
 
 ### 11.1 Notifier interface
 
-- [ ] `monitors/actions.py` — `Notifier` protocol with `send(level, title, body, run_id)`
-- [ ] **`GoogleChatNotifier`** — POST to webhook, formatted as Chat card
-  - [ ] Severity → header colour: green (ok), yellow (warning), red (critical)
-  - [ ] Card body includes: spider name, run_id, runtime, items scraped, match-status breakdown, validation failure rate, top 3 monitor failures, links to Sheet + Drive CSV + Postgres run row
-- [ ] **`LogOnlyNotifier`** — for local dev (no webhook calls)
+- [x] `monitors/notifiers.py` — `Notifier` typing.Protocol with `send(level, title, body, run_id) -> bool`. Two implementations:
+- [x] **`GoogleChatNotifier`** — POSTs Google Chat cardV2 payload via `httpx`. `tenacity.retry` (5 attempts, exponential backoff) on 5xx + transport errors; doesn't retry 4xx (config bug). Returns False without raising when `GOOGLE_CHAT_WEBHOOK_URL` is unset (dev-friendly). Header colour map: critical→red (#D93025), warning→yellow (#F9AB00), ok→green (#1E8E3E). Card body includes: spider name + run_id (header), level + body section, sheet/drive links, runtime, match breakdown, top monitor failures.
+- [x] **`LogOnlyNotifier`** — emits structured JSON log line. Severity → log level: critical→ERROR, warning→WARNING, ok→INFO. Used as test fallback and when webhook URL unset.
+- [x] `get_notifier()` factory picks GoogleChatNotifier when `GOOGLE_CHAT_WEBHOOK_URL` is set, else LogOnly.
 
 ### 11.2 End-of-run summary message
 
-Always sent at `spider_closed` regardless of pass/fail. Example:
+Always sent at engine_stopped regardless of pass/fail.
 
-```
-PropertyFinder weekly scrape — OK
-Run: 2026-04-29 02:14 UTC  (run_id: a1b2c3...)
-Items: 28,431 (matched 24,102 · ambiguous 311 · not_found 4,018)
-Validation failures: 142 (0.5%)
-Runtime: 1h 47m
-Sheet: <link>  Drive CSV: <link>
-```
+- [x] `SendChatSummaryAction` (Spidermon `Action` subclass) wired into `SpiderCloseMonitorSuite.monitors_finished_actions`. Fires after the close suite runs; reads the suite result + crawler.stats to build the card. Card colour reflects worst monitor outcome at or above `ALERT_MIN_LEVEL`.
 
 ### 11.3 Mid-run critical-only alerts
 
-- [ ] Circuit breakers from Phase 9.2 send a single message + close the spider
-- [ ] No mid-run warnings — too noisy
+- [x] `SendCriticalChatAlertAction` wired into `PeriodicMonitorSuite.monitors_failed_actions` alongside `CloseSpiderAction`. Class-level `_fired` flag idempotency prevents duplicate ticks from sending twice. Title is constant (`"Circuit breaker tripped"`) so dedupe matches across re-runs.
+- [x] No mid-run warnings — periodic suite only fires actions on failure (Phase 9.2 design).
 
 ### 11.4 Anti-spam
 
-- [ ] `alert_log` table tracks every alert sent
-- [ ] Suppress identical alert (same level + title) within 30 min
-- [ ] Config: `ALERT_MIN_LEVEL=warning` for early runs, `critical` once stabilized
+- [x] `alert_log` table from Phase 3 — `recent_alert_exists(level, title, window)` checks last 30 min before sending.
+- [x] `log_alert(run_id, level, title, body)` records every successful Chat send (not the failed sends — those just log the error).
+- [x] Dedupe key is **global** `(level, title)`, not per-run — re-running a broken pipeline shouldn't re-spam.
+- [x] `ALERT_MIN_LEVEL` setting (env-overridable, default `warning`) filters which severities trigger an alert. Set to `critical` once monitors are calibrated.
+- [x] DB errors during dedupe check are swallowed — better to over-send than miss a circuit breaker.
 
 ### 11.5 Configurable backend
 
-- [ ] `.env`: `ALERT_BACKEND=google_chat` (default), `GOOGLE_CHAT_WEBHOOK_URL=...`
-- [ ] Easy to add `WhatsAppNotifier` (Twilio/CallMeBot) or `SlackNotifier` later — same protocol
+- [x] `.env.example`: `ALERT_BACKEND`, `GOOGLE_CHAT_WEBHOOK_URL`, `ALERT_MIN_LEVEL` already pinned (Phase 0).
+- [ ] **Deferred**: actual multi-backend branching (`ALERT_BACKEND=slack|whatsapp`). Notifier protocol shape supports it; today only Google Chat is implemented. Adding Slack later is a single new class with `.send()`.
+
+### 11.6 Tests + verification
+
+- [x] `tests/test_notifiers.py` — 14 tests: cardV2 payload shape (colour per severity, run_id in subtitle, `<br>` substitution, truncation marker), tenacity retry behavior (5xx retried, 4xx not), URL-unset graceful return, factory selection.
+- [x] `tests/test_chat_actions.py` — 12 tests: summary clean run / critical / warning / level filter / no-link path / log_alert skip on send-failure; critical action first-call send / idempotency / dedupe via alert_log / DB-error tolerance / from_crawler construction.
+- [x] `tests/test_brokers_repo.py` extended — `recent_alert_exists` true/false paths, `log_alert` insert + null-run-id case.
+- [x] **Live verified** with `GOOGLE_CHAT_WEBHOOK_URL=` (empty): `LogOnlyNotifier` fires, INFO log shows full card body with sheet + drive links, runtime, match breakdown. Spider runs cleanly with all 26 monitors + new actions.
+- [x] 362 total tests pass.
 
 ---
 
