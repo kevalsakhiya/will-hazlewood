@@ -28,7 +28,15 @@ EXTENSIONS = {
 # ValidationPipeline (Phase 2.3); Spidermon's pydantic-v1 path would
 # duplicate the work and may not align with our v2 schema.
 SPIDERMON_ENABLED = True
-SPIDERMON_SPIDER_CLOSE_MONITORS = (
+# IMPORTANT: register the close suite under ENGINE_STOPPED, not
+# SPIDER_CLOSE. spider_closed signal fires for both Spidermon
+# (via priority-500 extension) and our pipelines (priority 200/400
+# /500/600 via pipeline manager registration). Pipelines register
+# AFTER Spidermon, so on spider_closed the monitor would race
+# them and read pre-flush postgres/gsheets/gdrive stats.
+# engine_stopped fires once every spider_closed handler completes,
+# so all pipeline counters are final by the time monitors run.
+SPIDERMON_ENGINE_STOP_MONITORS = (
     "broker_scout.monitors.monitors.SpiderCloseMonitorSuite",
 )
 SPIDERMON_PERIODIC_MONITORS = {
@@ -56,6 +64,23 @@ VALIDATION_FIELD_FAILURE_RATE_THRESHOLD = 0.10
 # so we can keep the periodic threshold tight while letting the
 # close-suite check use a different value if needed.
 PERIODIC_429_THRESHOLD = 50
+
+# Phase 9.3.3 — close-suite HTTP/network thresholds.
+# Map of HTTP code → max allowed responses for a healthy run. Note:
+# 404 is NOT here — empirically PF returns 404 for many DLD broker
+# names that aren't on PF, and that's expected (becomes a not_found
+# stub via match_status). Alarming on 404 would create constant
+# false positives.
+SPIDERMON_UNWANTED_HTTP_CODES = {403: 20, 429: 100, 503: 5}
+RETRY_RATE_THRESHOLD = 0.15
+
+# Phase 9.3.7 — match-coverage thresholds.
+# (exact_brn + name_unique) / total ≥ 60% — high-confidence rate.
+MATCH_HIGH_CONFIDENCE_RATE_THRESHOLD = 0.60
+NOT_FOUND_RATE_THRESHOLD = 0.50
+AMBIGUOUS_RATE_THRESHOLD = 0.05
+# Any PF↔DLD BRN disagreement is worth surfacing.
+BRN_DRIFT_THRESHOLD = 0
 
 # Filled phase by phase per roadmap.md priority table:
 #   100 normalization · 200 validation · 300 dedupe ·

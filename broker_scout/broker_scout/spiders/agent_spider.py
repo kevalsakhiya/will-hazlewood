@@ -306,7 +306,16 @@ class AgentSpider(BaseBrokerSpider):
         self._extract_deal_history(item, agent_data)
 
         # Promote name match → exact_brn if PF's BRN agrees with DLD's.
-        # No-op when BRNs disagree (Phase 9 monitor flags drift).
+        # No-op when BRNs disagree — we flag the disagreement via the
+        # match/brn_drift counter so Phase 9.3.7's BRNDriftMonitor can
+        # surface it without a DB query.
+        if (
+            item.brn
+            and dld_broker.brn
+            and not dld_broker.brn.startswith("NOBRN:")
+            and item.brn != dld_broker.brn
+        ):
+            self.crawler.stats.inc_value("match/brn_drift")
         match_result = promote_to_brn_match(
             match_result, profile_brn=item.brn, dld_brn=dld_broker.brn
         )

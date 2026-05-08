@@ -442,9 +442,9 @@ Reads counters set by `ValidationPipeline` in Phase 2.3.
 
 #### 9.3.1 Volume
 
-- [ ] **`ItemCountMonitor`** *(built-in)* — `item_scraped_count >= MIN_ITEM_COUNT` (default 5000; we run with `DLD_LIMIT=0` against a 33k registry, so the floor catches catastrophic spider failure).
-- [ ] **`ItemCountIncreaseMonitor`** *(built-in)* — `item_scraped_count` ≥ 90% of last week's count *(reads from `scrape_runs.stats` JSONB — see §9.5 below for stats race).*
-- [ ] **`ZeroItemsMonitor`** *(custom)* — `item_scraped_count == 0` → critical. Loud-fail so a broken spider doesn't silently skip a week.
+- [ ] **`ItemCountMonitor`** *(built-in)* — defer until production tuning; need a sensible `SPIDERMON_MIN_ITEMS` for full 30k runs.
+- [ ] **`ItemCountIncreaseMonitor`** *(custom; not in Spidermon 1.25)* — needs cross-run history; defer to Phase 10.
+- [x] **`ZeroItemsMonitor`** *(custom)* — fails when `item_scraped_count == 0`. Loud-fail so a broken spider can't silently skip a week.
 
 #### 9.3.2 Field coverage
 
@@ -467,43 +467,45 @@ Reads counters set by `ValidationPipeline` in Phase 2.3.
 
 #### 9.3.3 HTTP / network
 
-- [ ] **`ErrorCountMonitor`** *(built-in)* — total errors < 50.
-- [ ] **`UnwantedHTTPCodesMonitor`** *(built-in)* — `403` < 20, `429` < 10, `503` < 5. *(Empirical baseline: at the current PF behavior, `404` is normal — many DLD brokers aren't on PF and trigger 404 from the search endpoint. Don't alarm on 404.)*
-- [ ] **`RetryRateMonitor`** *(custom)* — `retry/count / downloader/request_count > 15%` → warning.
+- [x] **`ErrorCountMonitor`** *(built-in, already in periodic suite from 9.0)* — total errors < `SPIDERMON_MAX_ERRORS` (500). Periodic suite catches mid-run; close-suite version skipped (would duplicate periodic).
+- [x] **`UnwantedHTTPCodesMonitor`** *(built-in)* — `SPIDERMON_UNWANTED_HTTP_CODES = {403: 20, 429: 100, 503: 5}`. **404 deliberately NOT in the dict** — empirically 404 is the normal PF response for DLD names not on PF (becomes a `not_found` stub via `match_status`); alarming on 404 would create constant false positives.
+- [x] **`RetryRateMonitor`** *(custom)* — `retry/count / downloader/request_count > RETRY_RATE_THRESHOLD` (default 0.15).
 
 #### 9.3.4 Runtime
 
-- [ ] **`RuntimeMonitor`** *(built-in)* — runtime within 50–200% of 4-week median.
-- [ ] **`FinishReasonMonitor`** *(built-in)* — must be in `{finished, closespider_itemcount, closespider_pagecount, closespider_timeout}` (mirrors the `SUCCESSFUL_REASONS` set in [pipelines/postgres.py](broker_scout/broker_scout/pipelines/postgres.py)).
+- [ ] **`RuntimeMonitor`** *(custom; not in Spidermon 1.25)* — needs cross-run history; defer to Phase 10.
+- [x] **`FinishReasonMonitor`** *(built-in, already from 9.0)* — `SPIDERMON_EXPECTED_FINISH_REASONS` mirrors `pipelines/postgres.py::SUCCESSFUL_REASONS`.
 
-#### 9.3.5 Pipeline health *(stat names corrected vs original spec)*
+#### 9.3.5 Pipeline health
 
-- [ ] **`PipelineFailureMonitor`** *(custom)* — all of:
+**Important ordering fix**: `PipelineFailureMonitor` runs on `engine_stopped` (registered via `SPIDERMON_ENGINE_STOP_MONITORS`), NOT `spider_closed`. Spidermon's extension registers its `spider_closed` handler before our pipelines do (extensions load before pipelines), so monitors on that signal would race the pipeline flush. `engine_stopped` fires once every `spider_closed` handler completes — guaranteed post-flush stats.
+
+- [x] **`PipelineFailureMonitor`** *(custom)* — five test methods, each checks one invariant:
   - `postgres/brokers_inserted == item_scraped_count`
   - `gsheets/rows_appended == item_scraped_count`
   - `gsheets/flush_failed == 0`
   - `gdrive_csv/upload_status == 'ok'`
   - `gdrive_csv/rows_uploaded == item_scraped_count`
-  - Any mismatch → critical.
+  - Each test skips when `item_scraped_count == 0` (let `ZeroItemsMonitor` own that case so we don't double-fire).
 
-#### 9.3.6 Extraction health *(updated for Phase 7 + 6 counters)*
+#### 9.3.6 Extraction health
 
-- [ ] **`ExtractionFailureMonitor`** *(custom)*:
-  - `extract/next_data/missing > 1%` of profile-fetch responses → critical.
-  - `extract/next_data/bad_json > 0` → critical *(any malformed JSON is suspicious).*
-  - `extract/agent_data/missing > 1%` → critical.
-  - `extract/search_json/fallback_used > 5%` → warning *(triggers when search-page JSON structure changes — alerts before BRN matching degrades).*
-  - `extract/brn/fallback_used > 20%` → warning.
-  - `extract/listings_api/non_json > 5%` → critical.
-  - `extract/listings_api/empty > 10%` → warning.
-  - `extract/agency_license/missing > 30%` → warning.
+- [x] **`ExtractionFailureMonitor`** *(custom)* — eight test methods, one per stat. Default thresholds in `DEFAULT_EXTRACTION_THRESHOLDS` dict (rate vs absolute clearly typed):
+  - `extract/next_data/missing > 1%` → fails.
+  - `extract/next_data/bad_json > 0` → fails (absolute; any malformed JSON suspicious).
+  - `extract/agent_data/missing > 1%` → fails.
+  - `extract/search_json/fallback_used > 5%` → fails (alerts before BRN matching degrades).
+  - `extract/brn/fallback_used > 20%` → fails.
+  - `extract/listings_api/non_json > 5%` → fails.
+  - `extract/listings_api/empty > 10%` → fails.
+  - `extract/agency_license/missing > 30%` → fails.
 
 #### 9.3.7 Match coverage
 
-- [ ] **`MatchStatusDistributionMonitor`** *(custom)* — `(match/exact_brn + match/name_unique) / item_scraped_count >= 60%` → warning if below.
-- [ ] **`NotFoundRateMonitor`** *(custom)* — `match/not_found / item_scraped_count < 50%` → warning above.
-- [ ] **`AmbiguousRateMonitor`** *(custom)* — `match/ambiguous / item_scraped_count < 5%` → warning above. *(With BRN-first match at the search step from Phase 6, ambiguous should be rare; sustained >5% suggests PF stopped exposing BRN in search JSON.)*
-- [ ] **`BRNDriftMonitor`** *(custom, NEW)* — counts brokers rows where `brn IS NOT NULL AND dld_brn IS NOT NULL AND brn != dld_brn`. >0 per run → warning. Surfaces regulator-side or PF-side BRN inconsistencies *(can't be discovered any other way; the BRN-first match accepts only equal pairs but rare cases promote via name with disagreeing BRNs).*
+- [x] **`MatchStatusDistributionMonitor`** *(custom)* — `(match/exact_brn + match/name_unique) / item_scraped_count >= 60%`. Threshold via `MATCH_HIGH_CONFIDENCE_RATE_THRESHOLD`.
+- [x] **`NotFoundRateMonitor`** *(custom)* — `match/not_found / item_scraped_count < 50%`. Threshold via `NOT_FOUND_RATE_THRESHOLD`.
+- [x] **`AmbiguousRateMonitor`** *(custom)* — `match/ambiguous / item_scraped_count < 5%`. With BRN-first match at search step (Phase 6), ambiguous should be rare; sustained >5% suggests PF stopped exposing BRN in search JSON.
+- [x] **`BRNDriftMonitor`** *(custom)* — `match/brn_drift <= BRN_DRIFT_THRESHOLD` (default 0). The counter is incremented in `agent_spider.parse_agent` whenever the extracted PF BRN differs from DLD's BRN (and DLD's isn't a synthesized `NOBRN:*` key).
 
 ### 9.4 Action wiring
 

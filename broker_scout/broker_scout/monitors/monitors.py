@@ -20,6 +20,7 @@ from spidermon import MonitorSuite
 from spidermon.contrib.scrapy.monitors import (
     ErrorCountMonitor,
     FinishReasonMonitor,
+    UnwantedHTTPCodesMonitor,
 )
 from spidermon.contrib.scrapy.monitors.base import BaseScrapyMonitor
 
@@ -30,6 +31,22 @@ from broker_scout.monitors.actions import CloseSpiderAction, LogOnlyAction
 DEFAULT_VALIDATION_FAILURE_RATE_THRESHOLD = 0.05
 DEFAULT_VALIDATION_FIELD_FAILURE_RATE_THRESHOLD = 0.10
 DEFAULT_PERIODIC_429_THRESHOLD = 50
+DEFAULT_RETRY_RATE_THRESHOLD = 0.15
+DEFAULT_MATCH_HIGH_CONFIDENCE_RATE_THRESHOLD = 0.60  # exact_brn + name_unique
+DEFAULT_NOT_FOUND_RATE_THRESHOLD = 0.50
+DEFAULT_AMBIGUOUS_RATE_THRESHOLD = 0.05
+DEFAULT_BRN_DRIFT_THRESHOLD = 0  # any drift fires
+# Per-counter rate ceilings for the extraction-health monitor.
+DEFAULT_EXTRACTION_THRESHOLDS: dict[str, float | int] = {
+    "extract/next_data/missing": 0.01,         # rate
+    "extract/next_data/bad_json": 0,           # absolute
+    "extract/agent_data/missing": 0.01,        # rate
+    "extract/search_json/fallback_used": 0.05, # rate
+    "extract/brn/fallback_used": 0.20,         # rate
+    "extract/listings_api/non_json": 0.05,     # rate
+    "extract/listings_api/empty": 0.10,        # rate
+    "extract/agency_license/missing": 0.30,    # rate
+}
 
 
 # ---------------------------------------------------------------- 9.1 monitors
@@ -141,14 +158,303 @@ class PeriodicRateLimitMonitor(_BrokerScoutMonitor):
         )
 
 
+# ---------------------------------------------------------------- 9.3 monitors
+
+
+class ZeroItemsMonitor(_BrokerScoutMonitor):
+    """Run produced zero items — usually means the spider crashed
+    before any DLD broker was processed. Loud-fail so a silent
+    wasted-week is impossible."""
+
+    def test_at_least_one_item_scraped(self):
+        scraped = self.stats.get("item_scraped_count", 0)
+        self.assertGreater(
+            scraped,
+            0,
+            "spider produced zero items — start_requests likely failed "
+            "before yielding anything (DLD load? spider class import?)",
+        )
+
+
+class RetryRateMonitor(_BrokerScoutMonitor):
+    """Retries should be rare. A high rate (e.g. >15%) signals
+    flakey upstream / network issues / bad proxies."""
+
+    def test_retry_rate_below_threshold(self):
+        requests = self.stats.get("downloader/request_count", 0)
+        retries = self.stats.get("retry/count", 0)
+        if requests == 0:
+            self.skipTest("no requests issued")
+            return
+        threshold = self.crawler.settings.getfloat(
+            "RETRY_RATE_THRESHOLD", DEFAULT_RETRY_RATE_THRESHOLD
+        )
+        rate = retries / requests
+        self.assertLessEqual(
+            rate,
+            threshold,
+            f"retry rate {rate:.2%} ({retries}/{requests}) exceeds {threshold:.2%}",
+        )
+
+
+class PipelineFailureMonitor(_BrokerScoutMonitor):
+    """All four sinks must process every scraped item.
+
+    Runs on `engine_stopped` (not `spider_closed`) — see settings.py
+    for the rationale: pipelines' close handlers fire as part of
+    spider_closed, so a monitor on the same signal would race them.
+    `engine_stopped` fires once every spider_closed handler has
+    completed, so all pipeline counters are final.
+    """
+
+    def test_postgres_inserted_all_items(self):
+        scraped = self.stats.get("item_scraped_count", 0)
+        if scraped == 0:
+            self.skipTest("no items")
+            return
+        inserted = self.stats.get("postgres/brokers_inserted", 0)
+        self.assertEqual(
+            inserted,
+            scraped,
+            f"postgres/brokers_inserted={inserted} but item_scraped_count={scraped}",
+        )
+
+    def test_gsheets_appended_all_items(self):
+        scraped = self.stats.get("item_scraped_count", 0)
+        if scraped == 0:
+            self.skipTest("no items")
+            return
+        appended = self.stats.get("gsheets/rows_appended", 0)
+        self.assertEqual(
+            appended,
+            scraped,
+            f"gsheets/rows_appended={appended} but item_scraped_count={scraped}",
+        )
+
+    def test_gsheets_no_flush_failure(self):
+        failed = self.stats.get("gsheets/flush_failed", 0)
+        self.assertEqual(
+            failed,
+            0,
+            "gsheets pipeline reported a flush failure — Sheets data may be incomplete",
+        )
+
+    def test_gdrive_csv_upload_status_ok(self):
+        scraped = self.stats.get("item_scraped_count", 0)
+        if scraped == 0:
+            self.skipTest("no items")
+            return
+        status = self.stats.get("gdrive_csv/upload_status", "missing")
+        # "skipped" is a legitimate outcome (zero rows), but we already
+        # short-circuited above. Anything other than "ok" here is bad.
+        self.assertEqual(
+            status,
+            "ok",
+            f"gdrive_csv/upload_status={status!r} (expected 'ok')",
+        )
+
+    def test_gdrive_csv_rows_uploaded_match(self):
+        scraped = self.stats.get("item_scraped_count", 0)
+        if scraped == 0:
+            self.skipTest("no items")
+            return
+        uploaded = self.stats.get("gdrive_csv/rows_uploaded", 0)
+        self.assertEqual(
+            uploaded,
+            scraped,
+            f"gdrive_csv/rows_uploaded={uploaded} but item_scraped_count={scraped}",
+        )
+
+
+class ExtractionFailureMonitor(_BrokerScoutMonitor):
+    """Extraction-health counters from Phase 7 must stay below thresholds.
+
+    A spike in any single counter signals PF schema change or upstream
+    breakage. Fixed thresholds defined in `DEFAULT_EXTRACTION_THRESHOLDS`
+    (numeric values are rates against `item_scraped_count`; `0` means
+    absolute count).
+    """
+
+    def test_next_data_missing_rate(self):
+        self._assert_rate_threshold("extract/next_data/missing")
+
+    def test_next_data_bad_json_count(self):
+        self._assert_absolute_threshold("extract/next_data/bad_json")
+
+    def test_agent_data_missing_rate(self):
+        self._assert_rate_threshold("extract/agent_data/missing")
+
+    def test_search_json_fallback_rate(self):
+        self._assert_rate_threshold("extract/search_json/fallback_used")
+
+    def test_brn_fallback_rate(self):
+        self._assert_rate_threshold("extract/brn/fallback_used")
+
+    def test_listings_api_non_json_rate(self):
+        self._assert_rate_threshold("extract/listings_api/non_json")
+
+    def test_listings_api_empty_rate(self):
+        self._assert_rate_threshold("extract/listings_api/empty")
+
+    def test_agency_license_missing_rate(self):
+        self._assert_rate_threshold("extract/agency_license/missing")
+
+    # ------------------------------------------------------------ helpers
+
+    def _assert_rate_threshold(self, stat_name: str) -> None:
+        scraped = self.stats.get("item_scraped_count", 0)
+        if scraped == 0:
+            self.skipTest("no items")
+            return
+        threshold = float(DEFAULT_EXTRACTION_THRESHOLDS[stat_name])
+        count = self.stats.get(stat_name, 0)
+        rate = count / scraped
+        self.assertLessEqual(
+            rate,
+            threshold,
+            f"{stat_name}: {count}/{scraped} = {rate:.2%} exceeds {threshold:.2%}",
+        )
+
+    def _assert_absolute_threshold(self, stat_name: str) -> None:
+        threshold = int(DEFAULT_EXTRACTION_THRESHOLDS[stat_name])
+        count = self.stats.get(stat_name, 0)
+        self.assertLessEqual(
+            count,
+            threshold,
+            f"{stat_name}: {count} (max allowed {threshold})",
+        )
+
+
+class MatchStatusDistributionMonitor(_BrokerScoutMonitor):
+    """High-confidence matches (exact_brn + name_unique) must be
+    ≥ HIGH_CONFIDENCE_RATE_THRESHOLD of total items. A drop usually
+    means PF stopped exposing BRN in search-page __NEXT_DATA__ and
+    we're falling back to fuzzy."""
+
+    def test_high_confidence_match_rate(self):
+        scraped = self.stats.get("item_scraped_count", 0)
+        if scraped == 0:
+            self.skipTest("no items")
+            return
+        exact = self.stats.get("match/exact_brn", 0)
+        unique = self.stats.get("match/name_unique", 0)
+        rate = (exact + unique) / scraped
+        threshold = self.crawler.settings.getfloat(
+            "MATCH_HIGH_CONFIDENCE_RATE_THRESHOLD",
+            DEFAULT_MATCH_HIGH_CONFIDENCE_RATE_THRESHOLD,
+        )
+        self.assertGreaterEqual(
+            rate,
+            threshold,
+            f"high-confidence match rate {rate:.2%} "
+            f"(exact_brn={exact} + name_unique={unique} / {scraped}) "
+            f"below threshold {threshold:.2%}",
+        )
+
+
+class NotFoundRateMonitor(_BrokerScoutMonitor):
+    """`not_found` rate above threshold suggests a broken search step
+    (PF rejecting our query format) — even our DLD-driven name search
+    shouldn't miss most brokers."""
+
+    def test_not_found_rate_below_threshold(self):
+        scraped = self.stats.get("item_scraped_count", 0)
+        if scraped == 0:
+            self.skipTest("no items")
+            return
+        not_found = self.stats.get("match/not_found", 0)
+        rate = not_found / scraped
+        threshold = self.crawler.settings.getfloat(
+            "NOT_FOUND_RATE_THRESHOLD", DEFAULT_NOT_FOUND_RATE_THRESHOLD
+        )
+        self.assertLess(
+            rate,
+            threshold,
+            f"not_found rate {rate:.2%} ({not_found}/{scraped}) "
+            f"exceeds threshold {threshold:.2%}",
+        )
+
+
+class AmbiguousRateMonitor(_BrokerScoutMonitor):
+    """`ambiguous` rate above threshold suggests PF stopped exposing
+    BRN in search-page JSON (BRN-first match in `match_candidates`
+    falls through to name fuzzy, which produces ambiguous when ≥2
+    candidates exceed the threshold)."""
+
+    def test_ambiguous_rate_below_threshold(self):
+        scraped = self.stats.get("item_scraped_count", 0)
+        if scraped == 0:
+            self.skipTest("no items")
+            return
+        ambiguous = self.stats.get("match/ambiguous", 0)
+        rate = ambiguous / scraped
+        threshold = self.crawler.settings.getfloat(
+            "AMBIGUOUS_RATE_THRESHOLD", DEFAULT_AMBIGUOUS_RATE_THRESHOLD
+        )
+        self.assertLess(
+            rate,
+            threshold,
+            f"ambiguous rate {rate:.2%} ({ambiguous}/{scraped}) "
+            f"exceeds threshold {threshold:.2%}",
+        )
+
+
+class BRNDriftMonitor(_BrokerScoutMonitor):
+    """Counts cases where PF's profile-page BRN disagrees with DLD's BRN.
+
+    Set by `agent_spider.parse_agent` via `match/brn_drift` counter
+    when both BRNs are present and unequal. The matching layer
+    deliberately doesn't promote disagreeing pairs to `exact_brn` —
+    they're real drift signals, not bugs to silence.
+    """
+
+    def test_no_brn_drift(self):
+        drift = self.stats.get("match/brn_drift", 0)
+        threshold = self.crawler.settings.getint(
+            "BRN_DRIFT_THRESHOLD", DEFAULT_BRN_DRIFT_THRESHOLD
+        )
+        self.assertLessEqual(
+            drift,
+            threshold,
+            f"{drift} item(s) had PF BRN ≠ DLD BRN (threshold {threshold}) — "
+            f"see brokers table where brn IS NOT NULL "
+            f"AND dld_brn IS NOT NULL AND brn != dld_brn",
+        )
+
+
 # ---------------------------------------------------------------- suites
 
 
 class SpiderCloseMonitorSuite(MonitorSuite):
+    """Runs on `engine_stopped` (NOT `spider_closed`) — see
+    `SPIDERMON_ENGINE_STOPPED_MONITORS` in [settings.py](../settings.py).
+
+    Pipelines hook `spider_closed` to flush their final batches; if
+    monitors ran on `spider_closed` too, they'd race and read
+    pre-flush stats. `engine_stopped` fires once every spider_closed
+    handler completes, so all `postgres/`, `gsheets/`, `gdrive_csv/`
+    counters are final.
+    """
+
     monitors = [
+        # Finish reason + validation (Phase 9.0/9.1)
         FinishReasonMonitor,
         ValidationFailureRateMonitor,
         ValidationFailureByFieldMonitor,
+        # Phase 9.3.1 volume
+        ZeroItemsMonitor,
+        # Phase 9.3.3 HTTP / network
+        UnwantedHTTPCodesMonitor,
+        RetryRateMonitor,
+        # Phase 9.3.5 pipeline health
+        PipelineFailureMonitor,
+        # Phase 9.3.6 extraction health
+        ExtractionFailureMonitor,
+        # Phase 9.3.7 match coverage + BRN drift
+        MatchStatusDistributionMonitor,
+        NotFoundRateMonitor,
+        AmbiguousRateMonitor,
+        BRNDriftMonitor,
     ]
     monitors_finished_actions = [LogOnlyAction]
 
