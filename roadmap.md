@@ -422,8 +422,12 @@ Three suites (validation, periodic, close) wired via `extensions.py`. Most monit
 
 Reads counters set by `ValidationPipeline` in Phase 2.3.
 
-- [ ] **`ValidationFailureRateMonitor`** *(custom)* — `validation/failed_total / (validation/passed_total + validation/failed_total) > 5%` → critical.
-- [ ] **`ValidationFailureByFieldMonitor`** *(custom)* — for any `validation/failed_field/{field}` counter, fail if `count / item_scraped_count > 10%` (catches PF schema drift on a specific field).
+- [x] **`ValidationFailureRateMonitor`** *(custom)* — `validation/failed_total / (passed + failed) > 5%` → fails. Threshold via `VALIDATION_FAILURE_RATE_THRESHOLD` setting. Skips when no validation activity (zero items / total) — `ZeroItemsMonitor` (9.3.1) handles the genuine-broken-spider case.
+- [x] **`ValidationFailureByFieldMonitor`** *(custom)* — for each `validation/failed_field/{field}` counter, fails if `count / item_scraped_count > 10%`. Threshold via `VALIDATION_FIELD_FAILURE_RATE_THRESHOLD`. Catches PF schema drift on a single field.
+- [x] Both inherit a private `_BrokerScoutMonitor(BaseScrapyMonitor)` base that sets `__test__ = False` so pytest doesn't auto-collect production Monitor classes as test cases (Spidermon's runtime uses stdlib `TestLoader` which ignores the attribute).
+- [x] Wired into `SpiderCloseMonitorSuite` alongside the existing `FinishReasonMonitor`.
+- [x] 13 new unit tests in `tests/test_validation_monitors.py` covering rate thresholds, per-field thresholds, zero-activity skips, multi-field error reporting, configurability, and a parity assertion that monitor defaults match `settings.py` values. 277 tests pass.
+- [x] Live-verified: spider run shows 3 monitors execute, all pass; `monitors passed` log emits with `passed_count: 3`.
 
 ### 9.2 Periodic suite (circuit breakers, fires every 60s)
 

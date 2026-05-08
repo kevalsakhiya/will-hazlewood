@@ -44,6 +44,11 @@ SPIDERMON_EXPECTED_FINISH_REASONS = (
     "closespider_pagecount",
     "closespider_timeout",
 )
+# Phase 9.1 — validation suite thresholds.
+# Overall validation failure rate; >5% suggests a systemic issue.
+VALIDATION_FAILURE_RATE_THRESHOLD = 0.05
+# Per-field failure rate; >10% on a single field signals PF schema drift.
+VALIDATION_FIELD_FAILURE_RATE_THRESHOLD = 0.10
 
 # Filled phase by phase per roadmap.md priority table:
 #   100 normalization · 200 validation · 300 dedupe ·
