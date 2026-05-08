@@ -721,7 +721,8 @@ A commit should leave the repo in a working state. Tests pass. The roadmap entry
 
 Concrete checklist when adding Bayut (Phase 8) or any future platform:
 
-1. **Subclass `BaseBrokerSpider`** in `spiders/<platform>.py`.
+1. **Subclass `BaseBrokerSpider`** in `spiders/<platform>.py`. Keep this file focused on **callbacks, request building, and stats decisions** — pure JSON-shape extractors live next door (see step 1a).
+1a. **Per-platform extractors in a sibling `spiders/_<platform>_extractors.py`.** Naming convention: leading underscore on the *module* signals "private to this spider; sibling spiders should not import it." See `spiders/_pf_extractors.py` for the model. Function shape: `extract_*(item, agent_data, response=None, stats=None)`. Functions that fall back to HTML take an optional `stats` parameter so they can record `extract/*` counters; tests pass `None` to skip the increment.
 2. Set `name`, `platform`, `warmup_url`, `handle_httpstatus_list`.
 3. Implement `search_for_broker(dld_broker)` — build the platform-specific search URL.
 4. Implement `parse_search_results(response, dld_broker)` — extract candidates, run `match_candidates`, route.
