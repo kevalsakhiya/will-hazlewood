@@ -82,6 +82,14 @@ AMBIGUOUS_RATE_THRESHOLD = 0.05
 # Any PF↔DLD BRN disagreement is worth surfacing.
 BRN_DRIFT_THRESHOLD = 0
 
+# Phase 9.3.2 — per-tier field coverage minimums.
+# Measured only over MATCHED rows (match_status in
+# {exact_brn, name_unique, name_fuzzy}) so not_found / ambiguous
+# stubs don't dilute the rate. Defined in monitors/coverage_tiers.py.
+FIELD_COVERAGE_CRITICAL_THRESHOLD = 0.95  # broker_name, agent_url, brn
+FIELD_COVERAGE_HIGH_THRESHOLD = 0.80
+FIELD_COVERAGE_MEDIUM_THRESHOLD = 0.50
+
 # Filled phase by phase per roadmap.md priority table:
 #   100 normalization · 200 validation · 300 dedupe ·
 #   400 postgres     · 500 gsheets    · 600 gdrive_csv

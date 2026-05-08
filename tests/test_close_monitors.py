@@ -353,6 +353,119 @@ def test_brn_drift_threshold_configurable():
 # ============================================================ default↔settings parity
 
 
+# ============================================================ MatchedRowFieldCoverageMonitor
+
+
+@pytest.fixture
+def patch_field_coverage(monkeypatch):
+    """Patch brokers_repo.matched_field_coverage so the monitor doesn't
+    actually hit Postgres in unit tests."""
+    calls = []
+
+    def _fake(run_id, fields, *args, **kwargs):
+        calls.append((run_id, tuple(fields)))
+        return _fake.return_value or {}
+
+    _fake.return_value = {}
+
+    monkeypatch.setattr(
+        "broker_scout.monitors.monitors.brokers_repo.matched_field_coverage",
+        _fake,
+    )
+    return _fake, calls
+
+
+def _coverage_monitor(method, run_id="r1", settings=None):
+    from broker_scout.monitors.monitors import MatchedRowFieldCoverageMonitor
+
+    stats = {"run_id": run_id, "_marker": 1}
+    return _make(MatchedRowFieldCoverageMonitor, method, stats, settings)
+
+
+def test_field_coverage_critical_passes_when_above_threshold(patch_field_coverage):
+    fake, _ = patch_field_coverage
+    fake.return_value = {"broker_name": 0.99, "agent_url": 0.97, "brn": 0.96}
+    m = _coverage_monitor("test_critical_field_coverage")
+    m.test_critical_field_coverage()
+
+
+def test_field_coverage_critical_fails_below_threshold(patch_field_coverage):
+    fake, _ = patch_field_coverage
+    fake.return_value = {"broker_name": 0.99, "agent_url": 0.50, "brn": 0.96}
+    m = _coverage_monitor("test_critical_field_coverage")
+    with pytest.raises(AssertionError) as exc_info:
+        m.test_critical_field_coverage()
+    msg = str(exc_info.value)
+    assert "agent_url=50%" in msg
+    # Above-threshold fields shouldn't appear in the failure message
+    assert "broker_name" not in msg
+
+
+def test_field_coverage_high_uses_lower_threshold(patch_field_coverage):
+    fake, _ = patch_field_coverage
+    fake.return_value = {f: 0.85 for f in
+                         ("listings_total", "experience_since", "nationality",
+                          "agency_url", "agency_name")}
+    m = _coverage_monitor("test_high_field_coverage")
+    m.test_high_field_coverage()  # 85% > 80%
+
+
+def test_field_coverage_medium_passes_at_50pct(patch_field_coverage):
+    fake, _ = patch_field_coverage
+    fake.return_value = {f: 0.51 for f in
+                         ("whatsapp_response_time", "is_superagent",
+                          "agent_specialization", "agency_registration_number")}
+    m = _coverage_monitor("test_medium_field_coverage")
+    m.test_medium_field_coverage()
+
+
+def test_field_coverage_no_matched_rows_skips(patch_field_coverage):
+    fake, _ = patch_field_coverage
+    fake.return_value = {}  # zero matched rows
+    m = _coverage_monitor("test_critical_field_coverage")
+    with pytest.raises(unittest.SkipTest):
+        m.test_critical_field_coverage()
+
+
+def test_field_coverage_no_run_id_skips(patch_field_coverage):
+    """Spider didn't open properly → skip gracefully."""
+    from broker_scout.monitors.monitors import MatchedRowFieldCoverageMonitor
+
+    m = _make(
+        MatchedRowFieldCoverageMonitor,
+        "test_critical_field_coverage",
+        stats={"_marker": 1},  # no run_id
+    )
+    with pytest.raises(unittest.SkipTest):
+        m.test_critical_field_coverage()
+
+
+def test_field_coverage_db_error_skips(patch_field_coverage):
+    """A flaky DB shouldn't fail the suite — skip and let other monitors
+    run on in-memory stats."""
+    fake, _ = patch_field_coverage
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("connection refused")
+
+    fake.side_effect = _boom
+    fake.return_value = None  # ignored due to side_effect
+    m = _coverage_monitor("test_critical_field_coverage")
+    with pytest.raises(unittest.SkipTest):
+        m.test_critical_field_coverage()
+
+
+def test_field_coverage_threshold_configurable(patch_field_coverage):
+    fake, _ = patch_field_coverage
+    fake.return_value = {"broker_name": 0.5, "agent_url": 0.5, "brn": 0.5}
+    # Override Critical threshold to 0.4 — failing data now passes.
+    m = _coverage_monitor(
+        "test_critical_field_coverage",
+        settings=FakeSettings(FIELD_COVERAGE_CRITICAL_THRESHOLD=0.4),
+    )
+    m.test_critical_field_coverage()
+
+
 def test_match_defaults_match_settings():
     from broker_scout import settings
 

@@ -11,9 +11,12 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable
 
+from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from broker_scout.common.db import get_pool
+
+MATCHED_STATUSES: tuple[str, ...] = ("exact_brn", "name_unique", "name_fuzzy")
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +146,48 @@ def close_run(
             "items_dropped": items_dropped,
         },
     )
+
+
+def matched_field_coverage(
+    run_id: str,
+    fields: tuple[str, ...],
+    matched_statuses: tuple[str, ...] = MATCHED_STATUSES,
+) -> dict[str, float]:
+    """Per-field non-null coverage rate over MATCHED rows for one run.
+
+    Used by Phase 9.3.2's `MatchedRowFieldCoverageMonitor` to measure
+    PF-side field coverage without contaminating the rate with
+    not_found / ambiguous stub rows (where PF fields are always NULL).
+
+    Returns `{field: rate}` where rate ∈ [0, 1]. Returns `{}` when no
+    matched rows exist for the run — caller decides whether that's a
+    skip or a failure.
+
+    Field names are SQL-escaped via `psycopg.sql.Identifier` even
+    though they come from internal constants — defense in depth so
+    `coverage_tiers.py` can't accidentally introduce injection if
+    Phase 8 (Bayut) adds a field with a problematic name.
+    """
+    if not fields:
+        return {}
+    pool = get_pool()
+    cols = sql.SQL(", ").join(
+        sql.SQL("sum(({col} IS NOT NULL)::int) AS {alias}").format(
+            col=sql.Identifier(f), alias=sql.Identifier(f)
+        )
+        for f in fields
+    )
+    query = sql.SQL(
+        "SELECT count(*) AS _n, {cols} FROM brokers "
+        "WHERE run_id = %s AND match_status = ANY(%s)"
+    ).format(cols=cols)
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(query, (run_id, list(matched_statuses)))
+        row = cur.fetchone()
+    if not row or row[0] == 0:
+        return {}
+    total = int(row[0])
+    return {field: int(row[i + 1] or 0) / total for i, field in enumerate(fields)}
 
 
 def update_run_stats(run_id: str, stats: dict) -> None:

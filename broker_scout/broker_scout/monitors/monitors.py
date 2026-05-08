@@ -24,6 +24,8 @@ from spidermon.contrib.scrapy.monitors import (
 )
 from spidermon.contrib.scrapy.monitors.base import BaseScrapyMonitor
 
+from broker_scout.common import brokers_repo
+from broker_scout.monitors import coverage_tiers
 from broker_scout.monitors.actions import CloseSpiderAction, LogOnlyAction
 
 # ---------------------------------------------------------------- defaults
@@ -36,6 +38,10 @@ DEFAULT_MATCH_HIGH_CONFIDENCE_RATE_THRESHOLD = 0.60  # exact_brn + name_unique
 DEFAULT_NOT_FOUND_RATE_THRESHOLD = 0.50
 DEFAULT_AMBIGUOUS_RATE_THRESHOLD = 0.05
 DEFAULT_BRN_DRIFT_THRESHOLD = 0  # any drift fires
+# Per-tier matched-row field-coverage minimums.
+DEFAULT_FIELD_COVERAGE_CRITICAL = 0.95
+DEFAULT_FIELD_COVERAGE_HIGH = 0.80
+DEFAULT_FIELD_COVERAGE_MEDIUM = 0.50
 # Per-counter rate ceilings for the extraction-health monitor.
 DEFAULT_EXTRACTION_THRESHOLDS: dict[str, float | int] = {
     "extract/next_data/missing": 0.01,         # rate
@@ -422,6 +428,78 @@ class BRNDriftMonitor(_BrokerScoutMonitor):
         )
 
 
+class MatchedRowFieldCoverageMonitor(_BrokerScoutMonitor):
+    """Per-tier field coverage measured ONLY over matched rows.
+
+    The native Spidermon `FieldCoverageMonitor` measures over every
+    item, so PF-side fields like `broker_name` get diluted by
+    not_found / ambiguous stubs (where they're always NULL). This
+    monitor queries Postgres directly at engine_stopped — by then
+    every item has been flushed by `PostgresPipeline` — and computes
+    coverage over rows where `match_status` ∈ `MATCHED_STATUSES`.
+
+    Three test methods, one per tier (Critical / High / Medium).
+    Each gathers the per-field rates and fails if any field falls
+    below the tier threshold, listing every offender for clarity.
+    Runs are skipped (not failed) when zero matched rows exist —
+    `ZeroItemsMonitor` and `NotFoundRateMonitor` cover those signals.
+    """
+
+    def test_critical_field_coverage(self):
+        self._assert_tier(
+            coverage_tiers.PF_CRITICAL_FIELDS,
+            "FIELD_COVERAGE_CRITICAL_THRESHOLD",
+            DEFAULT_FIELD_COVERAGE_CRITICAL,
+        )
+
+    def test_high_field_coverage(self):
+        self._assert_tier(
+            coverage_tiers.PF_HIGH_FIELDS,
+            "FIELD_COVERAGE_HIGH_THRESHOLD",
+            DEFAULT_FIELD_COVERAGE_HIGH,
+        )
+
+    def test_medium_field_coverage(self):
+        self._assert_tier(
+            coverage_tiers.PF_MEDIUM_FIELDS,
+            "FIELD_COVERAGE_MEDIUM_THRESHOLD",
+            DEFAULT_FIELD_COVERAGE_MEDIUM,
+        )
+
+    # ------------------------------------------------------------ helper
+
+    def _assert_tier(
+        self,
+        fields: tuple[str, ...],
+        setting_name: str,
+        default_threshold: float,
+    ) -> None:
+        if not fields:
+            self.skipTest("empty tier")
+            return
+        run_id = self.stats.get("run_id")
+        if not run_id:
+            self.skipTest("no run_id in stats")
+            return
+        threshold = self.crawler.settings.getfloat(setting_name, default_threshold)
+        try:
+            coverage = brokers_repo.matched_field_coverage(run_id, fields)
+        except Exception as exc:
+            # Don't fail the suite on a DB hiccup at engine_stopped —
+            # other monitors run on in-memory stats and stay valid.
+            self.skipTest(f"coverage query failed: {exc}")
+            return
+        if not coverage:
+            self.skipTest("no matched rows in this run")
+            return
+        below = [(f, r) for f, r in coverage.items() if r < threshold]
+        self.assertFalse(
+            below,
+            f"matched-row field coverage below {threshold:.0%}: "
+            + ", ".join(f"{f}={r:.0%}" for f, r in below),
+        )
+
+
 # ---------------------------------------------------------------- suites
 
 
@@ -455,6 +533,8 @@ class SpiderCloseMonitorSuite(MonitorSuite):
         NotFoundRateMonitor,
         AmbiguousRateMonitor,
         BRNDriftMonitor,
+        # Phase 9.3.2 field coverage (matched rows only)
+        MatchedRowFieldCoverageMonitor,
     ]
     monitors_finished_actions = [LogOnlyAction]
 

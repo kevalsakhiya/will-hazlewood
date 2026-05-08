@@ -50,6 +50,43 @@ def test_open_run_inserts_with_run_id_and_spider(mock_pool):
 # ------------------------------------------------------------- close_run
 
 
+def test_matched_field_coverage_zero_rows(mock_pool):
+    cur, _ = mock_pool
+    cur.fetchone.return_value = (0,) + (0,) * 3  # n=0 + per-field zeros
+    out = brokers_repo.matched_field_coverage(
+        "run-x", ("broker_name", "agent_url", "brn")
+    )
+    assert out == {}  # empty when no matched rows
+
+
+def test_matched_field_coverage_partial_rates(mock_pool):
+    cur, _ = mock_pool
+    # 100 matched rows; broker_name=95, agent_url=100, brn=70
+    cur.fetchone.return_value = (100, 95, 100, 70)
+    out = brokers_repo.matched_field_coverage(
+        "run-x", ("broker_name", "agent_url", "brn")
+    )
+    assert out["broker_name"] == 0.95
+    assert out["agent_url"] == 1.0
+    assert out["brn"] == 0.7
+
+
+def test_matched_field_coverage_uses_match_status_filter(mock_pool):
+    cur, _ = mock_pool
+    cur.fetchone.return_value = (10, 10)
+    brokers_repo.matched_field_coverage("run-x", ("broker_name",))
+    # cur.execute is called with the parameterized run_id + status list
+    args = cur.execute.call_args.args
+    assert args[1] == ("run-x", list(brokers_repo.MATCHED_STATUSES))
+
+
+def test_matched_field_coverage_empty_fields_no_query(mock_pool):
+    cur, _ = mock_pool
+    out = brokers_repo.matched_field_coverage("run-x", ())
+    assert out == {}
+    cur.execute.assert_not_called()
+
+
 def test_update_run_stats_replaces_blob(mock_pool):
     """Phase 9.5: a separate single-column UPDATE that the engine_stopped
     handler calls so the persisted stats blob captures gsheets/gdrive_csv

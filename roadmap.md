@@ -448,22 +448,18 @@ Reads counters set by `ValidationPipeline` in Phase 2.3.
 
 #### 9.3.2 Field coverage
 
-`monitors/coverage_tiers.py` defines tiers; `FieldCoverageMonitor` *(built-in)* enforces them.
+`monitors/coverage_tiers.py` defines tiers; `MatchedRowFieldCoverageMonitor` enforces the matched-only ones.
 
-**Provenance fields (Critical ≥ 99%)** — set on every item, including not_found/ambiguous stubs:
-- `platform`, `scrape_date`, `match_status`, `dld_brn`, `dld_broker_name`
-
-**PF-extracted fields, matched-row coverage (Critical ≥ 95%)** — measured *only over items where `match_status` is `exact_brn` / `name_unique` / `name_fuzzy`*. Custom variant of FieldCoverageMonitor since the built-in version measures over all items:
-- `broker_name`, `agent_url`, `brn`
-
-**PF-extracted, matched-row (High ≥ 80%)**:
-- `listings_total`, `experience_since`, `nationality`, `agency_url`, `agency_name`
-
-**PF-extracted, matched-row (Medium ≥ 50%)**:
-- `whatsapp_response_time`, `is_superagent`, `agent_specialization`, `agency_registration_number`
-
-**Informational (track only, no threshold)**:
-- All `closed_transaction_*`, all `average_listing_*`, `most_recent_*_date`, `listings_with_marketing_spend`, `match_confidence`.
+- [x] **`MatchedRowFieldCoverageMonitor`** *(custom)* — three test methods, one per tier (Critical/High/Medium). Reads coverage from Postgres directly via `brokers_repo.matched_field_coverage(run_id, fields)` rather than tracking per-item stats. The query filters `WHERE run_id = ? AND match_status IN (exact_brn, name_unique, name_fuzzy)` so PF-side fields aren't diluted by not_found/ambiguous stubs. Skips cleanly on zero-matched-rows / missing-run-id / DB-error so a transient hiccup doesn't fail the suite.
+- [x] Per-tier defaults from `monitors.py` (DEFAULT_FIELD_COVERAGE_CRITICAL = 0.95, HIGH = 0.80, MEDIUM = 0.50), env-overridable via `FIELD_COVERAGE_CRITICAL_THRESHOLD` etc.
+- [x] **PF-extracted matched-row tiers** (defined in `coverage_tiers.py`):
+  - Critical ≥ 95%: `broker_name`, `agent_url`, `brn`
+  - High ≥ 80%: `listings_total`, `experience_since`, `nationality`, `agency_url`, `agency_name`
+  - Medium ≥ 50%: `whatsapp_response_time`, `is_superagent`, `agent_specialization`, `agency_registration_number`
+- [x] **Provenance fields** (Critical, set on every item) — verified implicitly via the spider's stub-builder; explicit monitor deferred (would catch a code regression but the spider tests already lock those values).
+- [x] **Informational** (no threshold): all `closed_transaction_*`, `average_listing_*`, `most_recent_*_date`, `listings_with_marketing_spend`, `match_confidence` — tracked but not asserted on.
+- [x] 12 new tests cover query shape, per-rate computation, threshold logic, configurability, skip paths (zero rows, no run_id, DB error). 333 total tests pass.
+- [x] Live-verified: MatchedRowFieldCoverageMonitor's three test methods fire and pass against real DB data; total monitor count now 26 per run.
 
 #### 9.3.3 HTTP / network
 
