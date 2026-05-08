@@ -388,61 +388,138 @@ These are one-line `self.crawler.stats.inc_value(...)` calls. Cost nothing, accu
 
 ## Phase 9 — Spidermon wiring + monitors
 
-`extensions.py` wires Spidermon. Three suites: validation, periodic, close.
+Three suites (validation, periodic, close) wired via `extensions.py`. Most monitor specs are short — the bigger work is the Spidermon plumbing prerequisites and reconciling the original spec with the actual stat names emitted across Phases 2–7.
 
-### 9.1 Validation suite (per-item, runs in pipeline)
-*Already producing data from Phase 2.*
+**Audit findings vs original spec (corrected below):**
 
-- [ ] **`ValidationFailureRateMonitor`** *(custom)* — fail if `validation/failed_total / item_scraped_count > 5%`
-- [ ] **`ValidationFailureByFieldMonitor`** *(custom)* — fail if any single field > 10% failure rate (catches PF schema drift)
+- `postgres/items_inserted` → actual is `postgres/brokers_inserted`.
+- `gdrive/upload_status` → actual is `gdrive_csv/upload_status`.
+- New extraction counters from Phase 7 not in original spec: `extract/next_data/bad_json`, `extract/agent_data/missing`, `extract/search_json/fallback_used`.
+- New match counters from Phase 6 not in original spec: `match/promoted_to_exact_brn`, `match/ambiguous_disambiguated`, `match/ambiguous_exhausted`.
+- Field-coverage tiers didn't include the Phase 6.1 additions: `match_status`, `match_confidence`, `dld_brn`, `dld_broker_name`, `agency_name`.
+- "Always emit one item per DLD broker" (Phase 6) means PF-side fields like `broker_name` / `agent_url` only populate on matched items — coverage % over the full item stream is bounded by the match rate, not 95%. Tiers below split provenance fields (always set) from PF-extracted fields (match-dependent).
 
-### 9.2 Periodic suite (60s interval — circuit breakers)
+### 9.0 Plumbing prerequisites
 
-- [ ] **Periodic `ErrorCountMonitor`** *(built-in)* — kill spider if errors > 500
-- [ ] **Periodic `UnwantedHTTPCodesMonitor`** *(built-in)* — kill if `429` count > 50 (rate-limited)
-- [ ] On trigger: send single Google Chat alert + `crawler.engine.close_spider("circuit_breaker")` — no spam
+- [ ] Confirm `spidermon = "^1.23"` is pinned in [pyproject.toml](pyproject.toml) *(it is, since Phase 0).*
+- [ ] Create `broker_scout/monitors/` package: `__init__.py`, `monitors.py`, `coverage_tiers.py`, `actions.py` *(actions.py grows real notifiers in Phase 11; Phase 9 ships a `LogOnlyAction` placeholder so monitor failures surface in logs).*
+- [ ] Wire Spidermon in `extensions.py`: enable extension + register the three suites.
+- [ ] Add Spidermon settings to `settings.py`:
+  - `SPIDERMON_ENABLED = True`
+  - `SPIDERMON_VALIDATION_MODELS = {...}` *(uses our pydantic schema)*
+  - `SPIDERMON_SPIDER_OPEN_MONITORS = ()`
+  - `SPIDERMON_SPIDER_CLOSE_MONITORS = ('broker_scout.monitors.monitors.SpiderCloseMonitorSuite',)`
+  - `SPIDERMON_PERIODIC_MONITORS = {'broker_scout.monitors.monitors.PeriodicMonitorSuite': 60}`
+  - `SPIDERMON_VALIDATION_MONITORS = ('broker_scout.monitors.monitors.ValidationMonitorSuite',)`
+  - `SPIDERMON_SPIDER_CLOSE_ACTION_LIST = ('broker_scout.monitors.actions.LogOnlyAction',)` *(Phase 11 swaps this for `GoogleChatNotifier`).*
 
-### 9.3 Close suite (run once at spider end)
+### 9.1 Validation suite (per-item)
 
-**Volume**
-- [ ] **`ItemCountMonitor`** *(built-in)* — minimum item count threshold
-- [ ] **`ItemCountIncreaseMonitor`** *(built-in)* — minimum increase vs prior run
-- [ ] **`ZeroItemsMonitor`** *(custom)* — fail loudly when 0 items
+Reads counters set by `ValidationPipeline` in Phase 2.3.
 
-**Field coverage** — `FieldCoverageMonitor` *(built-in)*, three tiers:
-- [ ] **Critical (≥ 95%)**: `broker_name`, `agent_url`, `scrape_date`, `platform`
-- [ ] **High (≥ 80%)**: `listings_total`, `experience_since`, `nationality`, `agency_url`
-- [ ] **Medium (≥ 50%)**: `whatsapp_response_time`, `is_superagent`, `agent_specialization`, `agency_registration_number`
-- [ ] **Informational** (track-only, no threshold): all `closed_transaction_*`, all `average_listing_*`, `most_recent_*_date`, `listings_with_marketing_spend`
-- [ ] Tier definitions live in `monitors/coverage_tiers.py`
+- [ ] **`ValidationFailureRateMonitor`** *(custom)* — `validation/failed_total / (validation/passed_total + validation/failed_total) > 5%` → critical.
+- [ ] **`ValidationFailureByFieldMonitor`** *(custom)* — for any `validation/failed_field/{field}` counter, fail if `count / item_scraped_count > 10%` (catches PF schema drift on a specific field).
 
-**HTTP / network**
-- [ ] **`ErrorCountMonitor`** *(built-in)* — total errors < 50
-- [ ] **`UnwantedHTTPCodesMonitor`** *(built-in)* — `403` < 20, `429` < 10, `503` < 5
-- [ ] **`RetryRateMonitor`** *(custom)* — `retry_count / request_count > 15%` → warning
+### 9.2 Periodic suite (circuit breakers, fires every 60s)
 
-**Runtime**
-- [ ] **`RuntimeMonitor`** *(built-in)* — runtime within 50–200% of 4-week median
-- [ ] **`FinishReasonMonitor`** *(built-in)* — must equal `finished`
+- [ ] **Periodic `ErrorCountMonitor`** *(built-in)* — close spider if `log_count/ERROR > 500`.
+- [ ] **Periodic `UnwantedHTTPCodesMonitor`** *(built-in)* — close if `downloader/response_status_count/429 > 50`.
+- [ ] **Action**: `crawler.engine.close_spider("circuit_breaker")` + (Phase 11) one-shot Google Chat critical alert. Single message — no per-tick spam.
 
-**Pipeline health**
-- [ ] **`PipelineFailureMonitor`** *(custom)*
-  - [ ] `postgres/items_inserted` equals `item_scraped_count`
-  - [ ] `gsheets/rows_appended` equals `item_scraped_count`
-  - [ ] `gdrive/upload_status` equals `ok`
-  - [ ] Any mismatch → critical
+### 9.3 Close suite
 
-**Extraction health** — reads counters from Phase 7
-- [ ] **`ExtractionFailureMonitor`** *(custom)*
-  - [ ] `extract/next_data/missing` > 1% of agent pages → critical
-  - [ ] `extract/brn/fallback_used` > 20% → warning
-  - [ ] `extract/listings_api/non_json` > 5% → critical
-  - [ ] `extract/agency_license/missing` > 30% → warning
+#### 9.3.1 Volume
 
-**Match coverage** *(post-Phase 6)*
-- [ ] **`MatchStatusDistributionMonitor`** *(custom)* — `exact_brn + name_unique` ≥ 60% of DLD brokers
-- [ ] **`NotFoundRateMonitor`** *(custom)* — `match=not_found` < 50%
-- [ ] **`AmbiguousRateMonitor`** *(custom)* — `match=ambiguous` < 5%
+- [ ] **`ItemCountMonitor`** *(built-in)* — `item_scraped_count >= MIN_ITEM_COUNT` (default 5000; we run with `DLD_LIMIT=0` against a 33k registry, so the floor catches catastrophic spider failure).
+- [ ] **`ItemCountIncreaseMonitor`** *(built-in)* — `item_scraped_count` ≥ 90% of last week's count *(reads from `scrape_runs.stats` JSONB — see §9.5 below for stats race).*
+- [ ] **`ZeroItemsMonitor`** *(custom)* — `item_scraped_count == 0` → critical. Loud-fail so a broken spider doesn't silently skip a week.
+
+#### 9.3.2 Field coverage
+
+`monitors/coverage_tiers.py` defines tiers; `FieldCoverageMonitor` *(built-in)* enforces them.
+
+**Provenance fields (Critical ≥ 99%)** — set on every item, including not_found/ambiguous stubs:
+- `platform`, `scrape_date`, `match_status`, `dld_brn`, `dld_broker_name`
+
+**PF-extracted fields, matched-row coverage (Critical ≥ 95%)** — measured *only over items where `match_status` is `exact_brn` / `name_unique` / `name_fuzzy`*. Custom variant of FieldCoverageMonitor since the built-in version measures over all items:
+- `broker_name`, `agent_url`, `brn`
+
+**PF-extracted, matched-row (High ≥ 80%)**:
+- `listings_total`, `experience_since`, `nationality`, `agency_url`, `agency_name`
+
+**PF-extracted, matched-row (Medium ≥ 50%)**:
+- `whatsapp_response_time`, `is_superagent`, `agent_specialization`, `agency_registration_number`
+
+**Informational (track only, no threshold)**:
+- All `closed_transaction_*`, all `average_listing_*`, `most_recent_*_date`, `listings_with_marketing_spend`, `match_confidence`.
+
+#### 9.3.3 HTTP / network
+
+- [ ] **`ErrorCountMonitor`** *(built-in)* — total errors < 50.
+- [ ] **`UnwantedHTTPCodesMonitor`** *(built-in)* — `403` < 20, `429` < 10, `503` < 5. *(Empirical baseline: at the current PF behavior, `404` is normal — many DLD brokers aren't on PF and trigger 404 from the search endpoint. Don't alarm on 404.)*
+- [ ] **`RetryRateMonitor`** *(custom)* — `retry/count / downloader/request_count > 15%` → warning.
+
+#### 9.3.4 Runtime
+
+- [ ] **`RuntimeMonitor`** *(built-in)* — runtime within 50–200% of 4-week median.
+- [ ] **`FinishReasonMonitor`** *(built-in)* — must be in `{finished, closespider_itemcount, closespider_pagecount, closespider_timeout}` (mirrors the `SUCCESSFUL_REASONS` set in [pipelines/postgres.py](broker_scout/broker_scout/pipelines/postgres.py)).
+
+#### 9.3.5 Pipeline health *(stat names corrected vs original spec)*
+
+- [ ] **`PipelineFailureMonitor`** *(custom)* — all of:
+  - `postgres/brokers_inserted == item_scraped_count`
+  - `gsheets/rows_appended == item_scraped_count`
+  - `gsheets/flush_failed == 0`
+  - `gdrive_csv/upload_status == 'ok'`
+  - `gdrive_csv/rows_uploaded == item_scraped_count`
+  - Any mismatch → critical.
+
+#### 9.3.6 Extraction health *(updated for Phase 7 + 6 counters)*
+
+- [ ] **`ExtractionFailureMonitor`** *(custom)*:
+  - `extract/next_data/missing > 1%` of profile-fetch responses → critical.
+  - `extract/next_data/bad_json > 0` → critical *(any malformed JSON is suspicious).*
+  - `extract/agent_data/missing > 1%` → critical.
+  - `extract/search_json/fallback_used > 5%` → warning *(triggers when search-page JSON structure changes — alerts before BRN matching degrades).*
+  - `extract/brn/fallback_used > 20%` → warning.
+  - `extract/listings_api/non_json > 5%` → critical.
+  - `extract/listings_api/empty > 10%` → warning.
+  - `extract/agency_license/missing > 30%` → warning.
+
+#### 9.3.7 Match coverage
+
+- [ ] **`MatchStatusDistributionMonitor`** *(custom)* — `(match/exact_brn + match/name_unique) / item_scraped_count >= 60%` → warning if below.
+- [ ] **`NotFoundRateMonitor`** *(custom)* — `match/not_found / item_scraped_count < 50%` → warning above.
+- [ ] **`AmbiguousRateMonitor`** *(custom)* — `match/ambiguous / item_scraped_count < 5%` → warning above. *(With BRN-first match at the search step from Phase 6, ambiguous should be rare; sustained >5% suggests PF stopped exposing BRN in search JSON.)*
+- [ ] **`BRNDriftMonitor`** *(custom, NEW)* — counts brokers rows where `brn IS NOT NULL AND dld_brn IS NOT NULL AND brn != dld_brn`. >0 per run → warning. Surfaces regulator-side or PF-side BRN inconsistencies *(can't be discovered any other way; the BRN-first match accepts only equal pairs but rare cases promote via name with disagreeing BRNs).*
+
+### 9.4 Action wiring
+
+- [ ] `monitors/actions.py` — `LogOnlyAction` (Phase 9 default; logs monitor failures at WARNING for warnings, ERROR for criticals).
+- [ ] `Notifier` protocol skeleton (filled by `GoogleChatNotifier` in Phase 11).
+- [ ] Periodic-suite circuit-breaker action: `CloseSpiderAction` *(custom)* — calls `crawler.engine.close_spider("circuit_breaker")`; suppresses follow-up tick callbacks via a `_fired` flag so we don't double-close.
+
+### 9.5 Stats race fix *(prerequisite for any monitor that reads `scrape_runs.stats`)*
+
+This wasn't in the original spec but is needed before Phase 10's cross-run drift monitors. The bug surfaced during Phase 4 verification: `gsheets/rows_appended` and `gdrive_csv/*` are incremented in their respective pipelines' `spider_closed`, but `PostgresPipeline.spider_closed` snapshots `crawler.stats` into `scrape_runs.stats` *before* those handlers run (signal handlers fire in registration order; Postgres registered first because it's at priority 400 vs Sheets at 500 vs Drive at 600).
+
+For Phase 9, in-memory monitors don't care — they all read live `crawler.stats` after every pipeline has flushed. But for Phase 10 monitors that read prior runs' `scrape_runs.stats` JSONB, the stored blob is missing those counters.
+
+- [ ] **Move the `scrape_runs.stats` snapshot to a dedicated extension** (`broker_scout/extensions.py`) firing on `spider_closed` with a low priority (so it runs after all pipelines). The pipeline keeps doing `close_run` for status / counts; the stats blob update moves to the extension.
+- [ ] Tests: stats blob captures all `gsheets/*`, `gdrive_csv/*`, `match/*`, `extract/*` counters.
+
+### 9.6 Tests
+
+- [ ] `tests/test_monitors.py` — Spidermon's `MonitorTestCase` utility lets us drive each custom monitor against a synthetic stats dict.
+  - [ ] `ValidationFailureRateMonitor`: 5% threshold, both sides.
+  - [ ] `ValidationFailureByFieldMonitor`: 10% per-field threshold.
+  - [ ] `ZeroItemsMonitor`: hard zero only.
+  - [ ] `PipelineFailureMonitor`: each of the four mismatches.
+  - [ ] `ExtractionFailureMonitor`: each threshold.
+  - [ ] `MatchStatusDistributionMonitor` / `NotFoundRateMonitor` / `AmbiguousRateMonitor` / `BRNDriftMonitor`.
+  - [ ] `RetryRateMonitor`.
+- [ ] `tests/test_coverage_tiers.py` — every spider field appears in exactly one tier; provenance fields aren't grouped with PF-extracted fields.
+- [ ] `tests/test_stats_extension.py` — extension writes the full Scrapy stats blob to `scrape_runs.stats` after all pipeline close handlers have fired.
 
 ---
 
