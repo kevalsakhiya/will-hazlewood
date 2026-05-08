@@ -23,12 +23,13 @@ from spidermon.contrib.scrapy.monitors import (
 )
 from spidermon.contrib.scrapy.monitors.base import BaseScrapyMonitor
 
-from broker_scout.monitors.actions import LogOnlyAction
+from broker_scout.monitors.actions import CloseSpiderAction, LogOnlyAction
 
 # ---------------------------------------------------------------- defaults
 
 DEFAULT_VALIDATION_FAILURE_RATE_THRESHOLD = 0.05
 DEFAULT_VALIDATION_FIELD_FAILURE_RATE_THRESHOLD = 0.10
+DEFAULT_PERIODIC_429_THRESHOLD = 50
 
 
 # ---------------------------------------------------------------- 9.1 monitors
@@ -114,6 +115,32 @@ class ValidationFailureByFieldMonitor(_BrokerScoutMonitor):
         )
 
 
+# ---------------------------------------------------------------- 9.2 monitors
+
+
+class PeriodicRateLimitMonitor(_BrokerScoutMonitor):
+    """Circuit breaker: too many 429s mid-run → stop now.
+
+    Decoupled from the close-suite `UnwantedHTTPCodesMonitor` (Phase
+    9.3.3) so we can set a tight periodic threshold (50 by default)
+    without it affecting post-run analysis. Hitting 50 rate-limited
+    responses mid-run is a strong signal we're being throttled — abort
+    before we burn through proxies or escalate to an account-level
+    block.
+    """
+
+    def test_429_below_threshold(self):
+        count = self.stats.get("downloader/response_status_count/429", 0)
+        threshold = self.crawler.settings.getint(
+            "PERIODIC_429_THRESHOLD", DEFAULT_PERIODIC_429_THRESHOLD
+        )
+        self.assertLessEqual(
+            count,
+            threshold,
+            f"rate-limited: {count} 429 responses (threshold {threshold})",
+        )
+
+
 # ---------------------------------------------------------------- suites
 
 
@@ -127,5 +154,16 @@ class SpiderCloseMonitorSuite(MonitorSuite):
 
 
 class PeriodicMonitorSuite(MonitorSuite):
-    monitors = [ErrorCountMonitor]
-    monitors_finished_actions = [LogOnlyAction]
+    """Circuit-breaker suite, fires every 60s during a run.
+
+    Actions are wired to `monitors_failed_actions` only — we don't
+    want a "monitors passed" INFO log every 60 seconds. CloseSpiderAction
+    is idempotent (once-only class flag), so a sustained failure across
+    multiple ticks doesn't repeatedly try to close the spider.
+    """
+
+    monitors = [
+        ErrorCountMonitor,
+        PeriodicRateLimitMonitor,
+    ]
+    monitors_failed_actions = [LogOnlyAction, CloseSpiderAction]

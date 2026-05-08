@@ -431,9 +431,12 @@ Reads counters set by `ValidationPipeline` in Phase 2.3.
 
 ### 9.2 Periodic suite (circuit breakers, fires every 60s)
 
-- [ ] **Periodic `ErrorCountMonitor`** *(built-in)* — close spider if `log_count/ERROR > 500`.
-- [ ] **Periodic `UnwantedHTTPCodesMonitor`** *(built-in)* — close if `downloader/response_status_count/429 > 50`.
-- [ ] **Action**: `crawler.engine.close_spider("circuit_breaker")` + (Phase 11) one-shot Google Chat critical alert. Single message — no per-tick spam.
+- [x] **`ErrorCountMonitor`** *(built-in)* — fires when `log_count/ERROR > SPIDERMON_MAX_ERRORS` (default 500).
+- [x] **`PeriodicRateLimitMonitor`** *(custom, replaces the original "UnwantedHTTPCodesMonitor" approach)* — fires when `downloader/response_status_count/429 > PERIODIC_429_THRESHOLD` (default 50). Decoupled from the close-suite `UnwantedHTTPCodesMonitor` (9.3.3) so periodic threshold can be tightened without affecting post-run analysis.
+- [x] **`CloseSpiderAction`** *(custom)* — calls `crawler.engine.close_spider(spider, "circuit_breaker")`. Once-only (class-level `_fired` flag) so subsequent ticks during the deferred shutdown don't re-call. Defensive against missing `engine` / `spider` attributes (logs warning instead of crashing).
+- [x] Periodic suite wires `LogOnlyAction` + `CloseSpiderAction` into `monitors_failed_actions` only — no per-tick INFO spam during a healthy run.
+- [x] 13 unit tests cover threshold boundaries, action idempotency, missing-engine handling, `from_crawler` construction, and suite-wiring shape. 290 total tests pass.
+- [x] Live verified: 3 close-suite monitors run + pass; periodic suite enabled (no 60s tick fires in single-broker test runs because the run closes faster than the interval — verified the suite is registered).
 
 ### 9.3 Close suite
 

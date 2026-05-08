@@ -50,6 +50,13 @@ VALIDATION_FAILURE_RATE_THRESHOLD = 0.05
 # Per-field failure rate; >10% on a single field signals PF schema drift.
 VALIDATION_FIELD_FAILURE_RATE_THRESHOLD = 0.10
 
+# Phase 9.2 — periodic circuit-breaker thresholds.
+# Mid-run 429 count above this triggers a circuit-breaker close.
+# Decoupled from the close-suite UnwantedHTTPCodesMonitor (9.3.3)
+# so we can keep the periodic threshold tight while letting the
+# close-suite check use a different value if needed.
+PERIODIC_429_THRESHOLD = 50
+
 # Filled phase by phase per roadmap.md priority table:
 #   100 normalization · 200 validation · 300 dedupe ·
 #   400 postgres     · 500 gsheets    · 600 gdrive_csv

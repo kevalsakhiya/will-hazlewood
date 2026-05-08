@@ -29,7 +29,7 @@ class LogOnlyAction(Action):
 
     @classmethod
     def from_crawler_kwargs(cls, crawler):
-        # No DI needed in 9.0; suite + monitor state is in `self.result`
+        # No DI needed; suite + monitor state is in `self.result`
         # and `self.data` provided by Spidermon at run() time.
         return {}
 
@@ -56,3 +56,51 @@ class LogOnlyAction(Action):
                     "failed_count": len(failed),
                 },
             )
+
+
+class CloseSpiderAction(Action):
+    """Circuit-breaker action — closes the spider when a periodic
+    monitor fires.
+
+    Once-only: subsequent ticks see ``_fired=True`` and short-circuit,
+    so we don't spam logs or repeatedly call ``engine.close_spider``
+    while the deferred shutdown completes. Class-level flag is fine
+    because one spider runs per Python process in our deployment;
+    a fresh process for the next run resets the flag naturally.
+
+    Wired into the periodic suite's ``monitors_failed_actions`` only —
+    we do NOT want to close the spider on a passing tick.
+    """
+
+    _fired: bool = False
+
+    @classmethod
+    def from_crawler_kwargs(cls, crawler):
+        return {"crawler": crawler}
+
+    def __init__(self, crawler):
+        super().__init__()
+        self._crawler = crawler
+
+    def run_action(self) -> None:
+        if CloseSpiderAction._fired:
+            return
+        CloseSpiderAction._fired = True
+        logger.error(
+            "circuit breaker tripped — closing spider",
+            extra={"reason": "circuit_breaker"},
+        )
+        engine = getattr(self._crawler, "engine", None)
+        spider = getattr(self._crawler, "spider", None)
+        if engine is None or spider is None:
+            logger.warning(
+                "circuit breaker fired but engine/spider unavailable",
+                extra={"engine": engine, "spider": spider},
+            )
+            return
+        engine.close_spider(spider, "circuit_breaker")
+
+    @classmethod
+    def reset(cls) -> None:
+        """Test-only: reset the once-fired flag between unit tests."""
+        cls._fired = False

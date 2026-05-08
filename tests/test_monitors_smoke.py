@@ -38,6 +38,10 @@ def test_periodic_suite_has_at_least_one_monitor():
 
 
 def test_both_suites_wire_log_only_action():
+    """Close suite logs every run (success or failure) on
+    `monitors_finished_actions`. Periodic suite logs only on failure
+    (`monitors_failed_actions`) to avoid per-tick INFO spam during a
+    healthy run — see Phase 9.2."""
     from broker_scout.monitors.actions import LogOnlyAction
     from broker_scout.monitors.monitors import (
         PeriodicMonitorSuite,
@@ -45,7 +49,7 @@ def test_both_suites_wire_log_only_action():
     )
 
     assert LogOnlyAction in SpiderCloseMonitorSuite.monitors_finished_actions
-    assert LogOnlyAction in PeriodicMonitorSuite.monitors_finished_actions
+    assert LogOnlyAction in PeriodicMonitorSuite.monitors_failed_actions
 
 
 def test_log_only_action_inherits_spidermon_action():
