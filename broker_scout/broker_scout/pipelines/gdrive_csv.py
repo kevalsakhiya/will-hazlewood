@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import csv
 import logging
-import os
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -41,8 +40,9 @@ TIMESTAMP_FMT = "%Y%m%d-%H%M%S"
 class GDriveCsvPipeline:
     """Per-run CSV writer that uploads to Drive on spider close."""
 
-    def __init__(self, out_dir: str = DEFAULT_OUT_DIR):
+    def __init__(self, out_dir: str = DEFAULT_OUT_DIR, folder_id: str = ""):
         self._out_dir = Path(out_dir)
+        self._folder_id = folder_id
         self._csv_path: Path | None = None
         self._writer: csv.writer | None = None
         self._fh = None
@@ -51,7 +51,7 @@ class GDriveCsvPipeline:
 
     @classmethod
     def from_crawler(cls, crawler):
-        pipe = cls()
+        pipe = cls(folder_id=crawler.settings.get("GDRIVE_CSV_FOLDER_ID", ""))
         # Use signals so we run *after* RunIdExtension has set
         # spider.run_id (same reasoning as Postgres + Sheets pipelines).
         crawler.signals.connect(pipe.spider_opened, signal=signals.spider_opened)
@@ -128,11 +128,11 @@ class GDriveCsvPipeline:
             spider.crawler.stats.set_value("gdrive_csv/upload_status", "failed")
 
     def _upload(self, spider) -> str:
-        folder_id = os.getenv("GDRIVE_CSV_FOLDER_ID")
-        if not folder_id:
+        if not self._folder_id:
             raise RuntimeError(
                 "GDRIVE_CSV_FOLDER_ID is unset — see .env.example for setup"
             )
+        folder_id = self._folder_id
 
         timestamp = datetime.now(UTC).strftime(TIMESTAMP_FMT)
         upload_name = f"{self._spider_name}_{timestamp}.csv"

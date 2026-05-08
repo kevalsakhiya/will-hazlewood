@@ -180,4 +180,6 @@ class PostgresPipeline:
             return
         n = brokers_repo.insert_bad_items(bad)
         spider.crawler.stats.inc_value("postgres/bad_items_inserted", n)
-        spider.bad_items.clear()
+        # Rebind, don't clear() — decouples ownership of the list we
+        # just handed to the repo from any reference still in flight.
+        spider.bad_items = []

@@ -1,6 +1,21 @@
+"""PropertyFinder broker spider.
+
+DLD-seeded fan-out: one DLD broker → search → match (BRN-first, then
+exact-name, then fuzzy) → profile fetch → agency fetch → paginated
+listings API → emit. The ambiguous case walks plausible candidates
+profile-by-profile, comparing each one's BRN to DLD's, before giving
+up and emitting an `ambiguous` stub.
+
+JSON parsing in two layers: `__NEXT_DATA__` JSON via `jmespath` for
+the primary path, HTML XPath fallbacks (with `extract/*` counters) for
+defence-in-depth when PF reshapes a payload.
+"""
+
+from __future__ import annotations
+
 import json
+from collections.abc import Iterable
 from datetime import datetime, timezone
-from typing import Iterable
 from urllib.parse import quote_plus
 
 import jmespath
@@ -76,7 +91,9 @@ class AgentSpider(BaseBrokerSpider):
             cb_kwargs={"dld_broker": dld_broker},
         )
 
-    def parse_search_results(self, response, dld_broker: DLDBroker):
+    def parse_search_results(
+        self, response, dld_broker: DLDBroker
+    ) -> Iterable[Request | dict]:
         # 404 = PF found nothing → empty candidate list → not_found stub.
         # Other 4xx/5xx still propagate normally; we only opt in to 404
         # via handle_httpstatus_list above.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -12,6 +13,8 @@ from broker_scout.common.run_context import (
     clear_run_context,
     set_run_context,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class RunIdExtension:
@@ -49,10 +52,15 @@ class RunIdExtension:
         set_run_context(
             RunContext(run_id=run_id, scrape_date=scrape_date, spider_label=spider.name)
         )
-        spider.logger.info("run started", extra={"run_id": run_id})
+        logger.info("run started", extra={"run_id": run_id, "spider": spider.name})
 
     def spider_closed(self, spider, reason):
-        spider.logger.info(
-            "run finished", extra={"run_id": getattr(spider, "run_id", None), "reason": reason}
+        logger.info(
+            "run finished",
+            extra={
+                "run_id": getattr(spider, "run_id", None),
+                "reason": reason,
+                "spider": spider.name,
+            },
         )
         clear_run_context()

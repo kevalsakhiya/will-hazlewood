@@ -23,8 +23,11 @@ def fake_spider():
 
 
 @pytest.fixture
-def env(monkeypatch):
-    monkeypatch.setenv("GDRIVE_CSV_FOLDER_ID", "csv-folder-id")
+def env(pipeline):
+    """Phase-12 §7.1 compliance: GDRIVE_CSV_FOLDER_ID is read in
+    `settings.py` and passed into the pipeline at construction time
+    (no runtime env reads). Tests inject it directly on the instance."""
+    pipeline._folder_id = "csv-folder-id"
 
 
 @pytest.fixture
@@ -184,10 +187,12 @@ def test_spider_closed_swallows_upload_failure(
 
 
 def test_spider_closed_missing_folder_id_marks_failed(
-    pipeline, fake_spider, monkeypatch, mock_drive
+    pipeline, fake_spider, mock_drive
 ):
     pipeline.process_item({"broker_name": "Foo"}, fake_spider)
-    monkeypatch.delenv("GDRIVE_CSV_FOLDER_ID", raising=False)
+    # No env fixture and no manual injection → folder_id is empty,
+    # _upload raises, and the close handler marks status=failed.
+    pipeline._folder_id = ""
     pipeline.spider_closed(fake_spider, reason="finished")
     fake_spider.crawler.stats.set_value.assert_any_call(
         "gdrive_csv/upload_status", "failed"

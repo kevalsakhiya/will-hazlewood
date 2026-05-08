@@ -77,7 +77,7 @@ def upsert_brokers(brokers: Iterable[DLDBroker], run_id: str) -> tuple[int, int]
                     ins, upd = _flush(cur, batch)
                     inserted += ins
                     updated += upd
-                    batch.clear()
+                    batch = []
             if batch:
                 ins, upd = _flush(cur, batch)
                 inserted += ins

@@ -96,6 +96,12 @@ FIELD_COVERAGE_MEDIUM_THRESHOLD = 0.50
 # failures shown on the card.
 ALERT_MIN_LEVEL = os.getenv("ALERT_MIN_LEVEL", "warning")
 
+# Phase 5 — Drive CSV pipeline.
+# Drive folder that receives one CSV per spider run. Read here so
+# GDriveCsvPipeline picks it up via crawler.settings (single-source
+# env-var rule, §7.1).
+GDRIVE_CSV_FOLDER_ID = os.getenv("GDRIVE_CSV_FOLDER_ID", "")
+
 # Filled phase by phase per roadmap.md priority table:
 #   100 normalization · 200 validation · 300 dedupe ·
 #   400 postgres     · 500 gsheets    · 600 gdrive_csv

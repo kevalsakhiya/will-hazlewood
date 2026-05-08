@@ -155,14 +155,17 @@ def test_spider_closed_marks_ok_for_deliberate_close(
 def test_spider_closed_drains_bad_items(repo_mock, fake_spider):
     p = PostgresPipeline()
     p.spider_opened(fake_spider)
-    fake_spider.bad_items = [
+    bad_items = [
         {"run_id": "run-abc", "platform": "propertyfinder", "reason": "x", "payload": {}}
     ]
+    fake_spider.bad_items = bad_items
     repo_mock.insert_bad_items.return_value = 1
 
     p.spider_closed(fake_spider, reason="finished")
 
-    repo_mock.insert_bad_items.assert_called_once_with(fake_spider.bad_items)
+    # Snapshot the list passed to the repo (rebind, not clear — §4.3),
+    # then assert the buffer was reset on the spider.
+    repo_mock.insert_bad_items.assert_called_once_with(bad_items)
     fake_spider.crawler.stats.inc_value.assert_any_call("postgres/bad_items_inserted", 1)
     assert fake_spider.bad_items == []
 

@@ -12,9 +12,9 @@ from __future__ import annotations
 
 import logging
 from abc import abstractmethod
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from itertools import islice
-from typing import Iterable
 
 from scrapy import Request, Spider
 
@@ -92,7 +92,9 @@ class BaseBrokerSpider(Spider):
         raise NotImplementedError
 
     @abstractmethod
-    def parse_search_results(self, response, dld_broker: DLDBroker):
+    def parse_search_results(
+        self, response, dld_broker: DLDBroker
+    ) -> Iterable[Request | dict]:
         """Extract candidates, run matching, yield either:
           * a profile-fetch request for the picked candidate, OR
           * a DLD-only stub item for ambiguous / not_found cases.

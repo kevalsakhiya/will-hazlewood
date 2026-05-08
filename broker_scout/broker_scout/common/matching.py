@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Optional
 
 from rapidfuzz import fuzz
 
@@ -48,18 +47,18 @@ class Candidate:
 
     name: str
     url: str
-    brn: Optional[str] = None
+    brn: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class MatchResult:
     status: MatchStatusType
     confidence: float                     # 0..1
-    candidate_url: Optional[str] = None
-    candidate_brn: Optional[str] = None
+    candidate_url: str | None = None
+    candidate_brn: str | None = None
 
 
-def _normalize_name(s: Optional[str]) -> str:
+def _normalize_name(s: str | None) -> str:
     """Lowercase, strip punctuation, collapse whitespace.
 
     Returns empty string for None / empty input — caller decides
@@ -182,7 +181,7 @@ def find_plausible_candidates(
 
 
 def promote_to_brn_match(
-    match_result: MatchResult, profile_brn: Optional[str], dld_brn: str
+    match_result: MatchResult, profile_brn: str | None, dld_brn: str
 ) -> MatchResult:
     """Upgrade a name-based match to `exact_brn` once we've fetched the
     profile and confirmed the BRN matches DLD.
