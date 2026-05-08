@@ -214,16 +214,52 @@ class AgentSpider(BaseBrokerSpider):
             return fallback.strip()
         return None
 
-    @staticmethod
-    def _extract_candidates(response) -> list[Candidate]:
-        """Pull (name, url) pairs out of the agent-list panel.
+    def _extract_candidates(self, response) -> list[Candidate]:
+        """Pull (name, url, brn) tuples out of the search results.
 
-        PF's agent-card anchor has no text content — the broker name is
-        in the `title` attribute (and `aria-label` as fallback). We use
-        the per-card `data-testid="agent-card-link"` rather than the
-        outer AgentList → li → a path so structure tweaks below the
-        list-card boundary don't break extraction.
+        Primary source: `props.pageProps.agents.data` from the embedded
+        `__NEXT_DATA__` JSON. That payload exposes each candidate's BRN
+        directly (in `compliances[?type=='brn'].value`), letting us do
+        an exact-BRN match in `match_candidates` without any profile
+        fetch. Falls back to HTML XPath when the JSON is missing or
+        malformed (defense-in-depth — Phase 7 monitor counts the
+        fallback rate).
         """
+        raw = response.xpath('.//script[@id="__NEXT_DATA__"]/text()').get()
+        if raw:
+            try:
+                next_data = json.loads(raw)
+                agents = jmespath.search("props.pageProps.agents.data", next_data) or []
+            except (json.JSONDecodeError, TypeError):
+                agents = []
+            if agents:
+                out: list[Candidate] = []
+                for a in agents:
+                    name = (a.get("name") or "").strip()
+                    slug = (a.get("slug") or "").strip()
+                    agent_id = a.get("id")
+                    if not name or not slug or agent_id is None:
+                        continue
+                    # Prefer compliances[type='brn'].value (always
+                    # populated for licensed brokers); licenseNumber
+                    # is sometimes empty even when the broker is
+                    # licensed — see Dharam's record.
+                    brn = jmespath.search(
+                        "compliances[?type=='brn'].value | [0]", a
+                    )
+                    if not brn:
+                        brn = (a.get("licenseNumber") or "").strip() or None
+                    out.append(
+                        Candidate(
+                            name=name,
+                            url=response.urljoin(f"/en/agent/{slug}-{agent_id}"),
+                            brn=str(brn).strip() if brn else None,
+                        )
+                    )
+                return out
+
+        # Fallback: HTML extraction (no BRN, name + url only).
+        self.crawler.stats.inc_value("extract/search_json/fallback_used")
         out: list[Candidate] = []
         for a in response.xpath('.//a[@data-testid="agent-card-link"]'):
             url = a.xpath('./@href').get()

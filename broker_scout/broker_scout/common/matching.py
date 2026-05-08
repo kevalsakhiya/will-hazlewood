@@ -78,12 +78,35 @@ def match_candidates(
     candidates: list[Candidate],
     fuzzy_threshold: int = DEFAULT_FUZZY_THRESHOLD,
 ) -> MatchResult:
-    """Disambiguate PF search results against a DLD broker by name.
+    """Disambiguate PF search results against a DLD broker.
 
-    See module docstring for status semantics.
+    BRN takes priority when available: PF's search-results JSON
+    (`props.pageProps.agents.data[].compliances[?type=='brn']`) exposes
+    each candidate's BRN inline, so we can confirm the regulator's
+    unique identifier without ever fetching a profile. Only when no
+    candidate's BRN equals the DLD BRN do we fall through to the name-
+    based matching below.
+
+    DLD brokers with synthesized `NOBRN:...` keys (records missing
+    `CardNumber`, see `dld_models._synthesize_brn`) skip the BRN pass —
+    the synthesized key would never match a real PF BRN.
     """
     if not candidates:
         return MatchResult(status="not_found", confidence=0.0)
+
+    # BRN-first match (the regulator's unique key — strongest signal).
+    if dld_broker.brn and not dld_broker.brn.startswith("NOBRN:"):
+        brn_matches = [c for c in candidates if c.brn and c.brn == dld_broker.brn]
+        if len(brn_matches) == 1:
+            c = brn_matches[0]
+            return MatchResult(
+                status="exact_brn",
+                confidence=EXACT_BRN_CONFIDENCE,
+                candidate_url=c.url,
+                candidate_brn=c.brn,
+            )
+        # 0 matches → fall through to name. >1 BRN matches is a
+        # regulator-side data integrity bug; let name disambiguate.
 
     dld_norm = _normalize_name(dld_broker.broker_name_en or dld_broker.broker_name_ar)
     if not dld_norm:

@@ -74,6 +74,78 @@ def test_normalize_name(raw, expected):
 # ============================================================ match_candidates
 
 
+# ============================================================ BRN-first
+
+
+def test_brn_match_beats_everything():
+    """When a candidate's BRN equals the DLD BRN, status is exact_brn
+    regardless of name fuzziness."""
+    result = match_candidates(
+        _dld(name="DHARAM VIR JUNEJA", brn="81462"),
+        [
+            Candidate(name="Totally Wrong Name", url="https://pf/x", brn="81462"),
+            Candidate(name="Dharam Vir Juneja", url="https://pf/y", brn="99999"),
+        ],
+    )
+    # BRN-match candidate wins — even though name says otherwise.
+    assert result.status == "exact_brn"
+    assert result.confidence == EXACT_BRN_CONFIDENCE
+    assert result.candidate_url == "https://pf/x"
+    assert result.candidate_brn == "81462"
+
+
+def test_brn_priority_skipped_for_synthesized_dld_brn():
+    """DLD brokers with `NOBRN:...` synthesized keys must NOT trigger
+    BRN-first matching — those keys are placeholders, never real BRNs."""
+    fake_brn = "NOBRN:LIC-1:dharam_vir_juneja"
+    result = match_candidates(
+        _dld(name="DHARAM VIR JUNEJA", brn=fake_brn),
+        [
+            # Pathological: a candidate whose BRN field accidentally
+            # equals the synthesized key. We must NOT match on it.
+            Candidate(name="Dharam Vir Juneja", url="https://pf/x", brn=fake_brn),
+        ],
+    )
+    # Falls through to name match (single exact name) → name_unique.
+    assert result.status == "name_unique"
+
+
+def test_no_brn_match_falls_through_to_name():
+    """No candidate's BRN equals DLD's BRN → fall through to name match."""
+    result = match_candidates(
+        _dld(name="DHARAM VIR JUNEJA", brn="81462"),
+        [Candidate(name="Dharam Vir Juneja", url="https://pf/y", brn="99999")],
+    )
+    assert result.status == "name_unique"
+
+
+def test_brn_match_when_candidates_have_no_brn_field():
+    """Backwards compat — old-shape candidates (HTML fallback) have
+    `brn=None`. Should fall through to name match cleanly."""
+    result = match_candidates(
+        _dld(name="DHARAM VIR JUNEJA", brn="81462"),
+        [Candidate(name="Dharam Vir Juneja", url="https://pf/y")],  # no brn
+    )
+    assert result.status == "name_unique"
+
+
+def test_two_brn_matches_falls_through_to_name():
+    """Two candidates claiming the same BRN is a regulator-side data
+    bug; we let name match decide rather than picking arbitrarily."""
+    result = match_candidates(
+        _dld(name="DHARAM VIR JUNEJA", brn="81462"),
+        [
+            Candidate(name="Dharam Vir Juneja", url="https://pf/a", brn="81462"),
+            Candidate(name="Dharam Vir Juneja", url="https://pf/b", brn="81462"),
+        ],
+    )
+    # Fell through to name → both same name → ambiguous.
+    assert result.status == "ambiguous"
+
+
+# ============================================================ name-based
+
+
 def test_no_candidates_is_not_found():
     result = match_candidates(_dld(), [])
     assert result.status == "not_found"
