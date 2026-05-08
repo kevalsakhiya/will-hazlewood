@@ -50,6 +50,25 @@ def test_open_run_inserts_with_run_id_and_spider(mock_pool):
 # ------------------------------------------------------------- close_run
 
 
+def test_update_run_stats_replaces_blob(mock_pool):
+    """Phase 9.5: a separate single-column UPDATE that the engine_stopped
+    handler calls so the persisted stats blob captures gsheets/gdrive_csv
+    counters set after PostgresPipeline's spider_closed."""
+    cur, conn = mock_pool
+    brokers_repo.update_run_stats("abc-123", {"gsheets/rows_appended": 42})
+    cur.execute.assert_called_once()
+    sql, params = cur.execute.call_args.args
+    assert "UPDATE scrape_runs" in sql
+    assert "stats" in sql
+    # Should NOT touch the other columns — narrow update preserves
+    # status/items_scraped/items_dropped from close_run.
+    assert "status" not in sql
+    assert "items_scraped" not in sql
+    assert params["run_id"] == "abc-123"
+    assert params["stats"].__class__.__name__ == "Jsonb"
+    conn.commit.assert_called_once()
+
+
 def test_close_run_updates_all_fields(mock_pool):
     cur, conn = mock_pool
     brokers_repo.close_run(

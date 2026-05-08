@@ -68,6 +68,7 @@ class PostgresPipeline:
         self._batch_size = batch_size
         self._run_id: str | None = None
         self._scrape_date: str | None = None
+        self._crawler = None  # set in from_crawler (needed by engine_stopped)
 
     @classmethod
     def from_crawler(cls, crawler):
@@ -81,6 +82,13 @@ class PostgresPipeline:
         #     line *after* RunIdExtension (extensions register first).
         crawler.signals.connect(pipe.spider_opened, signal=signals.spider_opened)
         crawler.signals.connect(pipe.spider_closed, signal=signals.spider_closed)
+        # engine_stopped fires AFTER every spider_closed handler completes
+        # — by then gsheets/gdrive_csv pipelines have flushed their final
+        # batches and incremented their stats. Re-snapshot the stats blob
+        # so scrape_runs.stats captures the full post-flush state (Phase
+        # 10's cross-run drift monitors read from this).
+        crawler.signals.connect(pipe.engine_stopped, signal=signals.engine_stopped)
+        pipe._crawler = crawler
         return pipe
 
     def spider_opened(self, spider) -> None:
@@ -120,6 +128,32 @@ class PostgresPipeline:
                 items_scraped=int(stats_dict.get("item_scraped_count", 0)),
                 items_dropped=int(stats_dict.get("item_dropped_count", 0)),
                 stats=_jsonable_stats(stats_dict),
+            )
+
+    def engine_stopped(self) -> None:
+        """Final stats-blob refresh, AFTER every spider_closed handler
+        has completed. Captures gsheets/* and gdrive_csv/* counters that
+        get incremented by those pipelines' spider_closed handlers
+        (which fire later in registration order than ours).
+        """
+        if self._run_id is None or self._crawler is None:
+            return
+        try:
+            stats_dict = dict(self._crawler.stats.get_stats())
+        except Exception:
+            logger.exception("engine_stopped: failed to read crawler.stats")
+            return
+        try:
+            brokers_repo.update_run_stats(
+                run_id=self._run_id,
+                stats=_jsonable_stats(stats_dict),
+            )
+        except Exception:
+            # Don't propagate — Scrapy's reactor is already shutting
+            # down. Log loudly so ops can spot it.
+            logger.exception(
+                "engine_stopped: failed to refresh scrape_runs.stats",
+                extra={"run_id": self._run_id},
             )
 
     def _ensure_run_opened(self, spider) -> None:

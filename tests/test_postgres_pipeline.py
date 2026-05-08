@@ -215,3 +215,47 @@ def test_jsonable_stats_falls_back_to_repr_for_exotic_types():
 
     out = _jsonable_stats({"thing": Weird()})
     assert out["thing"] == "Weird()"
+
+
+# ------------------------------------------------------------- engine_stopped (Phase 9.5)
+
+
+def test_engine_stopped_refreshes_stats_blob(repo_mock, fake_spider):
+    """engine_stopped fires after gsheets/gdrive close handlers;
+    PostgresPipeline re-snapshots crawler.stats so the persisted blob
+    captures their final counters."""
+    p = PostgresPipeline()
+    p._run_id = "run-abc"
+    p._crawler = fake_spider.crawler
+    fake_spider.crawler.stats.get_stats.return_value = {
+        "item_scraped_count": 1,
+        "postgres/brokers_inserted": 1,
+        "gsheets/rows_appended": 1,           # set AFTER our spider_closed
+        "gdrive_csv/upload_status": "ok",     # set AFTER our spider_closed
+    }
+    p.engine_stopped()
+    repo_mock.update_run_stats.assert_called_once()
+    kwargs = repo_mock.update_run_stats.call_args.kwargs
+    assert kwargs["run_id"] == "run-abc"
+    assert kwargs["stats"]["gsheets/rows_appended"] == 1
+    assert kwargs["stats"]["gdrive_csv/upload_status"] == "ok"
+
+
+def test_engine_stopped_no_op_without_run_id(repo_mock):
+    """Run never opened (e.g. crash before spider_opened) → skip."""
+    p = PostgresPipeline()
+    p._run_id = None
+    p._crawler = MagicMock()
+    p.engine_stopped()
+    repo_mock.update_run_stats.assert_not_called()
+
+
+def test_engine_stopped_swallows_repo_errors(repo_mock, fake_spider):
+    """The reactor is already shutting down; raising here would log a
+    cryptic 'unhandled error in deferred' message and obscure the real
+    failure. Log it and move on."""
+    p = PostgresPipeline()
+    p._run_id = "run-abc"
+    p._crawler = fake_spider.crawler
+    repo_mock.update_run_stats.side_effect = RuntimeError("DB gone")
+    p.engine_stopped()  # must NOT raise

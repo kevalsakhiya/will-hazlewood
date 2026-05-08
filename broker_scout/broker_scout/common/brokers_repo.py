@@ -98,6 +98,12 @@ UPDATE scrape_runs
  WHERE run_id        = %(run_id)s
 """
 
+_UPDATE_STATS_SQL = """
+UPDATE scrape_runs
+   SET stats   = %(stats)s
+ WHERE run_id  = %(run_id)s
+"""
+
 
 def open_run(run_id: str, spider: str) -> None:
     """Insert the run header so subsequent broker FKs can reference it."""
@@ -137,6 +143,26 @@ def close_run(
             "items_dropped": items_dropped,
         },
     )
+
+
+def update_run_stats(run_id: str, stats: dict) -> None:
+    """Replace the `stats` JSONB on a scrape_runs row.
+
+    Called from `PostgresPipeline.engine_stopped` (Phase 9.5) so the
+    blob captures the FINAL stats — including gsheets/* and
+    gdrive_csv/* counters that get incremented by their respective
+    pipelines' spider_closed handlers, which fire AFTER PostgresPipeline's.
+    `close_run` writes an early snapshot for defense-in-depth; this
+    overwrites it with the post-flush state.
+    """
+    pool = get_pool()
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            _UPDATE_STATS_SQL,
+            {"run_id": run_id, "stats": Jsonb(stats)},
+        )
+        conn.commit()
+    logger.info("updated scrape_run stats", extra={"run_id": run_id})
 
 
 def insert_brokers(

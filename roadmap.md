@@ -519,8 +519,11 @@ This wasn't in the original spec but is needed before Phase 10's cross-run drift
 
 For Phase 9, in-memory monitors don't care — they all read live `crawler.stats` after every pipeline has flushed. But for Phase 10 monitors that read prior runs' `scrape_runs.stats` JSONB, the stored blob is missing those counters.
 
-- [ ] **Move the `scrape_runs.stats` snapshot to a dedicated extension** (`broker_scout/extensions.py`) firing on `spider_closed` with a low priority (so it runs after all pipelines). The pipeline keeps doing `close_run` for status / counts; the stats blob update moves to the extension.
-- [ ] Tests: stats blob captures all `gsheets/*`, `gdrive_csv/*`, `match/*`, `extract/*` counters.
+- [x] `brokers_repo.update_run_stats(run_id, stats)` — narrow single-column UPDATE that replaces the `stats` JSONB. Doesn't touch status / items_scraped / items_dropped (those stay from the early `close_run` write).
+- [x] `PostgresPipeline.engine_stopped` (new signal handler) — re-snapshots `crawler.stats` and calls `update_run_stats`. Reuses the same `_jsonable_stats` coercion. Errors swallowed (reactor is shutting down; raising would log a cryptic deferred error).
+- [x] `close_run` keeps writing an early stats blob as defense-in-depth — if `engine_stopped` doesn't fire (rare), we still have something.
+- [x] 4 new tests: `update_run_stats` SQL shape, `engine_stopped` happy path / no-run-id skip / repo-error swallow. 321 total tests pass.
+- [x] Live-verified: latest run's `scrape_runs.stats` JSONB contains `gsheets/rows_appended=1`, `gdrive_csv/upload_status='ok'`, `gdrive_csv/rows_uploaded=1`. Older runs (pre-9.5) have NULL for those fields — confirms the fix.
 
 ### 9.6 Tests
 
