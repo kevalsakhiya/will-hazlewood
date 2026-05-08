@@ -29,7 +29,7 @@ from broker_scout.utils.logging_setup import configure_logging
 
 logger = logging.getLogger("oauth_setup")
 
-DEFAULT_CLIENT_PATH = "secrets/oauth_client.json"
+DEFAULT_CLIENT_PATH = "../secrets/oauth_client.json"
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:

@@ -4,7 +4,14 @@
       "Bash(python3 -c \"import docx; print\\('available'\\)\")",
       "Bash(pip3 install:*)",
       "Bash(python3 generate_proposal.py)",
-      "Bash(python3 -c \"from docx import Document; print\\('ok'\\)\")"
+      "Bash(python3 -c \"from docx import Document; print\\('ok'\\)\")",
+      "Bash(git add *)",
+      "Bash(git commit -m 'Phase 2.1: validation-layer plumbing prerequisites *)",
+      "Bash(grep -E \"Spidermon|engine_stopped|spider_closed|MonitorSuite\" /tmp/live18.log | head -15)",
+      "Read(//private/tmp/**)",
+      "Bash(poetry run python -c ' *)",
+      "Bash(awk '/^def close_run/,/^def [^_]/ {print NR\": \"$0}' /Users/kevalsakhiya/Desktop/work/will-hazlewood/broker_scout/broker_scout/common/brokers_repo.py)",
+      "Bash(LOG_FORMAT=pretty poetry run python -c ' *)"
     ]
   }
 }
