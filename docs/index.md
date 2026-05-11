@@ -18,6 +18,7 @@ The `docs/` folder picks up where those leave off — long-lived reference mater
 | Understand how the pieces fit together | [`architecture.md`](architecture.md) |
 | Know what shape an item is at each layer | [`data-flow.md`](data-flow.md) |
 | Know what every emitted stat means | [`data-flow.md`](data-flow.md#stat-namespaces) |
+| Look up a specific table or column | [`database.md`](database.md) |
 | Run / debug / triage a spider run | [`operators.md`](operators.md) |
 | Know what an alert means + how to react | [`operators.md`](operators.md#alerts--what-they-mean) |
 | Look up a specific monitor's threshold + intent | [`monitors.md`](monitors.md) |
