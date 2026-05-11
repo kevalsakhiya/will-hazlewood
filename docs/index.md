@@ -15,6 +15,7 @@ The `docs/` folder picks up where those leave off — long-lived reference mater
 
 | If you want to… | Read |
 |---|---|
+| Get a plain-English walkthrough of the whole system | [`workflow.md`](workflow.md) |
 | Understand how the pieces fit together | [`architecture.md`](architecture.md) |
 | Know what shape an item is at each layer | [`data-flow.md`](data-flow.md) |
 | Know what every emitted stat means | [`data-flow.md`](data-flow.md#stat-namespaces) |
