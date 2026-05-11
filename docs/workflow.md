@@ -226,16 +226,6 @@ The full operator workflow ends up looking something like:
 
 ---
 
-## What's not built yet
-
-| Item | Status |
-|---|---|
-| **Bayut spider** | Planned next. Same data flow as PropertyFinder; new spider file + payload extractors only. |
-| **Cross-run drift comparison** | Planned. Needs ~3–4 weeks of run history to be meaningful. Will compare this week's broker counts / averages to last week's and flag big jumps. |
-| **Production deployment** | Planned. Dockerfile + a cron schedule so the spider runs on its own without manual intervention. Plus a small "replay" tool that can re-feed a CSV from a past run back into Sheets if needed. |
-
----
-
 ## In short
 
 DLD list → spider visits each broker on PropertyFinder → matched record gets validated → saved to Postgres + Google Sheets + Drive CSV → monitors check the run end-to-end → Discord card tells you if anything looked wrong.
