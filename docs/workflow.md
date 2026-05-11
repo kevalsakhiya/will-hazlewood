@@ -8,9 +8,46 @@ A plain-English walkthrough of what happens from the moment we trigger the syste
 
 We pull the official list of licensed brokers from DLD (Dubai Land Department), then for each broker we search PropertyFinder, find their profile, and pull everything PropertyFinder publishes about them — listings, closed deals, agency info, performance numbers. All of this is stored in our own database, written into a Google Sheet you can browse, and archived as a CSV in Google Drive. While it's running, the system watches itself for problems and pings you on Discord if anything looks off.
 
+```mermaid
+flowchart LR
+    DLD["🏛️<br/>DLD<br/>(official registry)"]
+    PF["🏠<br/>PropertyFinder<br/>(broker profiles)"]
+    DB[("🗄️<br/>Postgres<br/>source of truth")]
+    SH["📗<br/>Google Sheet<br/>(monthly)"]
+    DRV["☁️<br/>Drive CSV<br/>(per-run backup)"]
+    DC["💬<br/>Discord alert"]
+
+    DLD -->|weekly fetch| DB
+    DB -->|seed list| PF
+    PF -->|enriched data| DB
+    DB --> SH
+    DB --> DRV
+    DB -.->|health check| DC
+
+    style DB fill:#1e3a8a,stroke:#fff,color:#fff
+    style DC fill:#7c3aed,stroke:#fff,color:#fff
+```
+
 ---
 
 ## Step by step — what happens on a normal week
+
+The weekly flow at a glance:
+
+```mermaid
+flowchart TD
+    A["⏰ Weekly trigger"] --> B["1️⃣ fetch_dld script<br/>→ refresh dld_brokers table"]
+    B --> C["2️⃣ Start spider<br/>→ write scrape_runs row<br/>→ assign run_id"]
+    C --> D["3️⃣ Iterate every active broker<br/>from dld_brokers"]
+    D --> E["4️⃣ For each broker<br/>→ search PropertyFinder<br/>→ try to match"]
+    E --> F["5️⃣ Validate + save record<br/>to Postgres / Sheet / Drive"]
+    F --> G{"More brokers?"}
+    G -->|yes| D
+    G -->|no| H["6️⃣ Close run<br/>→ finalize scrape_runs<br/>→ post Discord summary"]
+
+    style A fill:#7c3aed,color:#fff
+    style H fill:#10b981,color:#fff
+```
 
 ### Step 1 — Refresh the DLD broker list
 
@@ -40,6 +77,25 @@ Three things can happen:
 
 In all three cases, **we save a row** for that broker. Even the "no match" case gets a row with a status of `not_found` so we have a complete record — it's never silently skipped.
 
+```mermaid
+flowchart TD
+    Start["One DLD broker<br/>(from dld_brokers)"] --> Search["Search PropertyFinder"]
+    Search --> Found{"Any candidates?"}
+    Found -->|No| NF["📝 Save with<br/>match_status='not_found'<br/>(DLD info only)"]
+    Found -->|Yes| BRN{"BRN matches DLD?"}
+    BRN -->|Yes ✓| Exact["📝 Save with<br/>match_status='exact_brn'<br/>(strongest signal)"]
+    BRN -->|No| Name{"Name matches?"}
+    Name -->|One strong match| Unique["📝 Save with<br/>match_status='name_unique'<br/>or 'name_fuzzy'"]
+    Name -->|Multiple plausible| Amb["📝 Save with<br/>match_status='ambiguous'"]
+
+    style NF fill:#9ca3af,color:#fff
+    style Exact fill:#10b981,color:#fff
+    style Unique fill:#3b82f6,color:#fff
+    style Amb fill:#f59e0b,color:#fff
+```
+
+Whatever happens, **one DLD broker = one record saved.** Nothing is lost.
+
 ### Step 4 — Pull the broker's full profile
 
 When we find a match, we fetch the broker's PropertyFinder profile page and extract:
@@ -54,6 +110,22 @@ Listings are paginated, so the spider may fetch many pages per high-volume broke
 ### Step 5 — Save the result everywhere
 
 Once the broker's record is complete, it flows through three storage layers in order:
+
+```mermaid
+flowchart LR
+    Item["📦 Broker record<br/>(from spider)"] --> Val["✅ Validate<br/>schema check"]
+    Val -->|passes| PG["🗄️ Postgres<br/>brokers table"]
+    Val -->|fails| Bad["⚠️ bad_items table<br/>(with reason)"]
+    PG --> Sheet["📗 Google Sheet<br/>(monthly)"]
+    PG --> CSV["☁️ Drive CSV<br/>(per-run)"]
+
+    style PG fill:#1e3a8a,color:#fff
+    style Bad fill:#dc2626,color:#fff
+    style Sheet fill:#16a34a,color:#fff
+    style CSV fill:#16a34a,color:#fff
+```
+
+Each layer has a specific job:
 
 1. **Validation** — the record is checked for completeness and sanity (no negative prices, no impossibly-old dates, required fields present, etc.). Anything that fails the check goes into the `bad_items` table with the exact reason, so we never lose track of what was rejected.
 2. **Postgres** — the record lands in the `brokers` table. This is our **source of truth**. Every field is stored, plus a copy of the original raw data so we can always go back and see exactly what was on PropertyFinder when we scraped it.
@@ -73,6 +145,26 @@ When the spider finishes (either because it processed every DLD broker or hit a 
 ---
 
 ## How we know if something broke
+
+```mermaid
+flowchart TD
+    Run["🕷️ Spider running"] --> Periodic["⏱️ Every 60 seconds<br/>quick health check"]
+    Run --> End["🏁 At end of run<br/>26 detailed checks"]
+
+    Periodic --> Trip{"Threshold tripped?<br/>(too many errors,<br/>too many 429s)"}
+    Trip -->|Yes ⚠️| Stop["🛑 Stop spider<br/>+ red Discord alert"]
+    Trip -->|No ✓| Periodic
+
+    End --> Card{"Any check failed?"}
+    Card -->|All passed| Green["💚 Green Discord card<br/>'all good'"]
+    Card -->|Warnings only| Yellow["💛 Yellow Discord card<br/>'something to look at'"]
+    Card -->|Critical fail| Red["❤️ Red Discord card<br/>'something broke'"]
+
+    style Stop fill:#dc2626,color:#fff
+    style Green fill:#10b981,color:#fff
+    style Yellow fill:#f59e0b,color:#fff
+    style Red fill:#dc2626,color:#fff
+```
 
 While the spider is running, **26 separate health checks** are watching it. They look at things like:
 
