@@ -166,29 +166,99 @@ flowchart TD
     style Red fill:#dc2626,color:#fff
 ```
 
-While the spider is running, **26 separate health checks** are watching it. They look at things like:
+The system runs **26 separate health checks** on every spider run. They split into two groups by *when* they run.
 
-- Are at least some brokers being matched, or did everything come back as "not found"? (Usually means the search step is broken.)
-- Are validation failures spiking on a particular field? (Usually means PropertyFinder changed their data shape for that field.)
-- Is the spider getting rate-limited? (Too many 429 responses → we should slow down or rotate proxies.)
-- Did all three storage layers (Postgres, Sheets, Drive) save the same number of rows? (If not, one of them silently failed.)
-- Did certain fields stop populating? (E.g. the licence number suddenly being NULL on most rows means the agency-page extractor broke.)
-- Does PropertyFinder's BRN ever disagree with DLD's BRN for the same broker? (Real signal — could be a recently re-licensed broker, worth investigating.)
+### Group 1 — Live checks during the run (every 60 seconds)
 
-### Two flavours of alerts
+These are the safety brakes. If they trip, the spider is **stopped immediately** so we don't waste time or burn through quotas while something is broken.
 
-**Mid-run alerts** — if something serious happens *while* the spider is running (too many errors, sustained rate-limiting), the system stops the spider immediately and pings Discord with a "Circuit breaker tripped" card. Better to stop and investigate than to keep burning through the quota.
+| Check | What it watches | What "fail" means |
+|---|---|---|
+| **Error count** | Total number of error log lines so far | The spider is hitting too many problems to keep going. |
+| **Rate-limit watch** | How many "slow down" responses (429s) PropertyFinder has sent | We're being throttled — better to pause and investigate than get our IP banned. |
 
-**End-of-run summary** — every single run, regardless of pass or fail, posts a card to Discord with:
-- How many brokers were processed
-- How many matched vs. not_found
-- Whether all storage layers succeeded
-- How long the run took
-- Any monitors that failed, with the reason
+When either one trips, two things happen at once:
+- The spider closes itself cleanly.
+- A **red "Circuit breaker tripped" card** is posted to Discord with the live counters so you know exactly what tripped.
 
-The card is **green** if everything passed, **yellow** if there are warnings, **red** if something critical failed. So a quick glance at Discord tells you whether to look closer or just move on.
+### Group 2 — End-of-run checks (after the spider finishes)
 
-Every alert is also recorded in the `alert_log` table — useful for later review and to prevent the same alert spamming Discord if a problem persists.
+These run once, after every storage layer has flushed its final batch. They're more thorough — looking at the *quality* and *completeness* of the run, not just whether it survived.
+
+#### Did the run actually do its job?
+
+| Check | Plain-English meaning |
+|---|---|
+| **Finish reason looks healthy** | Did the spider stop on its own, or was it killed / cancelled mid-way? |
+| **At least some brokers were processed** | If we got zero items, the spider probably crashed before doing any work — loud failure so it doesn't go unnoticed. |
+| **Retry rate isn't too high** | If we had to retry too many requests, the network or proxies are flaky and the data may be incomplete. |
+| **Specific HTTP errors stayed in budget** | A few 403s or 503s are normal; lots of them aren't. |
+
+#### Did the data we extracted look right?
+
+| Check | Plain-English meaning |
+|---|---|
+| **Overall validation rate** | Of all the records we tried to save, how many failed our schema check? |
+| **No single field is failing too often** | If 90% of records have the same field rejected, PropertyFinder almost certainly changed that field's format. |
+| **Profile pages still parse** | If the embedded data on PF profile pages stopped loading, we're probably looking at a site redesign. |
+| **Search results still parse** | Same idea, for the search-results page. |
+| **Listings API still returns valid JSON** | The endpoint that returns each broker's listings hasn't changed shape. |
+| **BRN extraction works on most profiles** | We can pull the broker's licence number from most pages. |
+| **Agency licence numbers are still extractable** | The agency-page selector still works. |
+
+#### Did matching work the way we expect?
+
+| Check | Plain-English meaning |
+|---|---|
+| **High-confidence match rate** | A healthy chunk of brokers (60%+) match by either BRN or exact name — the strongest signals. |
+| **Not-found rate is reasonable** | Some "not found" is normal (not every DLD broker is on PF), but if 50%+ come back missing, the search step is probably broken. |
+| **Ambiguous rate is low** | Most brokers should resolve to one clear candidate. Lots of ambiguous cases means PF stopped exposing BRN in their search results. |
+| **PF and DLD agree on BRNs** | If PropertyFinder shows a different BRN than DLD has for the same broker, we flag it — could be a recent re-licensing, could be a data error worth checking. |
+
+#### Did we save everything we said we'd save?
+
+| Check | Plain-English meaning |
+|---|---|
+| **Postgres got every record** | The database row count matches the spider's count. |
+| **Google Sheet got every record** | Sheets row count matches too. |
+| **No Sheets flush errors** | The final Sheets push didn't hit any failures. |
+| **Drive CSV uploaded successfully** | The per-run CSV made it to Drive. |
+| **CSV row count matches the run** | The CSV has every record the spider produced. |
+
+#### Are the important fields actually populated?
+
+The system buckets every field into three tiers — Critical, High, Medium — based on how important it is. After the run, it checks **only the brokers we matched** (so empty `not_found` stubs don't drag the average down).
+
+| Check | Threshold | Meaning |
+|---|---|---|
+| **Critical fields populated** | 95%+ | Things like broker name, agent URL, BRN. If any of these drops, something is seriously broken. |
+| **High-priority fields populated** | 80%+ | Listing counts, closed-deal counts. Things you'd want for any analysis. |
+| **Medium-priority fields populated** | 50%+ | Things like average prices and agency URLs. Nice to have, occasional gaps OK. |
+
+Each tier shows you exactly which fields fell below the bar — so a "high-priority" failure might tell you "average_listing_price_sale dropped to 30%", and you know exactly where to look.
+
+### The two kinds of alerts you'll see in Discord
+
+**1. Mid-run "Circuit breaker tripped" alert** (rare, only when something is going wrong live)
+
+- Triggered by a Group 1 check.
+- The spider has already been stopped by the time you see this.
+- Card shows: which check tripped, current error count, how many items had been scraped so far, the run ID for cross-reference.
+
+**2. End-of-run summary card** (every run, no exceptions)
+
+- Posted as soon as the spider closes cleanly.
+- Card shows: run timestamp + ID, total items scraped, validation pass rate, match-status breakdown (how many exact matches, name matches, not-found, etc.), storage layer ✓/✗ marks (Postgres, Sheets, Drive), finish reason, runtime, and links to the live Sheet + Drive CSV.
+- Colour reflects the worst result:
+  - 💚 **Green** — every check passed. Nothing to do.
+  - 💛 **Yellow** — one or more "warning-level" checks failed. Worth a quick look but not urgent.
+  - ❤️ **Red** — at least one critical check failed. The card lists which ones, with the reason. Look soon.
+
+Even a passing run posts a green card on purpose — it's the "all clear" signal so you don't have to wonder whether the spider ran at all.
+
+### How alert spam is avoided
+
+Every alert that gets sent is also written to the `alert_log` table. Before sending the same critical alert twice, the system checks — if the same alert was sent in the last 30 minutes, it skips. So if a problem persists across multiple periodic checks, you get one alert, not a flood.
 
 ---
 
