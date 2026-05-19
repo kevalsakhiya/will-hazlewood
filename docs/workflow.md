@@ -1,6 +1,6 @@
 # How the system works — end-to-end walkthrough
 
-A plain-English walkthrough of what happens from the moment we trigger the system to the moment you can browse the results in a Google Sheet. Table names are mentioned in `code style` so you have reference points if you ever want to look something up.
+A walkthrough of what happens from the moment we trigger the system to the moment you can browse the results in a Google Sheet. Table names are mentioned in `code style` so you have reference points if you ever want to look something up.
 
 ---
 
@@ -187,7 +187,7 @@ These run once, after every storage layer has flushed its final batch. They're m
 
 #### Did the run actually do its job?
 
-| Check | Plain-English meaning |
+| Check | meaning |
 |---|---|
 | **Finish reason looks healthy** | Did the spider stop on its own, or was it killed / cancelled mid-way? |
 | **At least some brokers were processed** | If we got zero items, the spider probably crashed before doing any work — loud failure so it doesn't go unnoticed. |
@@ -196,7 +196,7 @@ These run once, after every storage layer has flushed its final batch. They're m
 
 #### Did the data we extracted look right?
 
-| Check | Plain-English meaning |
+| Check | meaning |
 |---|---|
 | **Overall validation rate** | Of all the records we tried to save, how many failed our schema check? |
 | **No single field is failing too often** | If 90% of records have the same field rejected, PropertyFinder almost certainly changed that field's format. |
@@ -208,7 +208,7 @@ These run once, after every storage layer has flushed its final batch. They're m
 
 #### Did matching work the way we expect?
 
-| Check | Plain-English meaning |
+| Check | meaning |
 |---|---|
 | **High-confidence match rate** | A healthy chunk of brokers (60%+) match by either BRN or exact name — the strongest signals. |
 | **Not-found rate is reasonable** | Some "not found" is normal (not every DLD broker is on PF), but if 50%+ come back missing, the search step is probably broken. |
@@ -217,7 +217,7 @@ These run once, after every storage layer has flushed its final batch. They're m
 
 #### Did we save everything we said we'd save?
 
-| Check | Plain-English meaning |
+| Check | meaning |
 |---|---|
 | **Postgres got every record** | The database row count matches the spider's count. |
 | **Google Sheet got every record** | Sheets row count matches too. |
